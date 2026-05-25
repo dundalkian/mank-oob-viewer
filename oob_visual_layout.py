@@ -11,9 +11,10 @@ class HierarchicalLayout:
     """
     
     # Layout constants (in logical units)
-    HORIZONTAL_SPACING = 50    # Space between sibling units
+    HORIZONTAL_SPACING = 52    # Base space between sibling units (at level 6)
+    HORIZONTAL_SPACING_INCREMENT = 20  # Additional spacing per level above level 6
     VERTICAL_SPACING = 75     # Space between parent and children
-    ROW_VERTICAL_SPACING = 35  # Space between the two rows
+    ROW_VERTICAL_SPACING = 25  # Space between the two rows
     
     def __init__(self, data: OOBData):
         """
@@ -62,25 +63,31 @@ class HierarchicalLayout:
 
         if side2_roots:
             subtree_widths = [self._compute_subtree_size(root)[0] for root in side2_roots]
-            total_width = sum(subtree_widths) + self.HORIZONTAL_SPACING * (len(side2_roots) - 1)
+            # Get spacing for root level
+            root_level = self.get_level_for_position(side2_roots[0]) if side2_roots else 1
+            root_spacing = self._get_horizontal_spacing_for_level(root_level)
+            total_width = sum(subtree_widths) + root_spacing * (len(side2_roots) - 1)
             start_x = -total_width / 2
             y_pos = 0 - self.VERTICAL_SPACING
             current_x = start_x
             for unit_idx, width in zip(side2_roots, subtree_widths):
                 x_pos = current_x + width / 2
                 self._layout_unit_recursive(unit_idx, x_pos, y_pos, direction=-1)
-                current_x += width + self.HORIZONTAL_SPACING
+                current_x += width + root_spacing
 
         if side1_roots:
             subtree_widths = [self._compute_subtree_size(root)[0] for root in side1_roots]
-            total_width = sum(subtree_widths) + self.HORIZONTAL_SPACING * (len(side1_roots) - 1)
+            # Get spacing for root level
+            root_level = self.get_level_for_position(side1_roots[0]) if side1_roots else 1
+            root_spacing = self._get_horizontal_spacing_for_level(root_level)
+            total_width = sum(subtree_widths) + root_spacing * (len(side1_roots) - 1)
             start_x = -total_width / 2
             y_pos = 0 + self.VERTICAL_SPACING
             current_x = start_x
             for unit_idx, width in zip(side1_roots, subtree_widths):
                 x_pos = current_x + width / 2
                 self._layout_unit_recursive(unit_idx, x_pos, y_pos, direction=1)
-                current_x += width + self.HORIZONTAL_SPACING
+                current_x += width + root_spacing
 
         return self.positions
     
@@ -123,6 +130,11 @@ class HierarchicalLayout:
             self.subtree_sizes[row_index] = size
             return size
 
+        # Get level-based spacing for children
+        parent_level = self.get_level_for_position(row_index)
+        child_level = parent_level + 1
+        child_spacing = self._get_horizontal_spacing_for_level(child_level)
+
         num_children = len(children)
         if num_children <= 3:
             top_children = children
@@ -137,11 +149,11 @@ class HierarchicalLayout:
 
         top_width = sum(width for width, _ in top_sizes)
         if len(top_children) > 1:
-            top_width += self.HORIZONTAL_SPACING * (len(top_children) - 1)
+            top_width += child_spacing * (len(top_children) - 1)
 
         bottom_width = sum(width for width, _ in bottom_sizes)
         if len(bottom_children) > 1:
-            bottom_width += self.HORIZONTAL_SPACING * (len(bottom_children) - 1)
+            bottom_width += child_spacing * (len(bottom_children) - 1)
 
         width = max(top_width, bottom_width, self.HORIZONTAL_SPACING)
 
@@ -177,6 +189,11 @@ class HierarchicalLayout:
             self.subtree_sizes[row_index] = (self.HORIZONTAL_SPACING, self.HORIZONTAL_SPACING)
             return
         
+        # Get level-based spacing for children
+        parent_level = self.get_level_for_position(row_index)
+        child_level = parent_level + 1
+        child_spacing = self._get_horizontal_spacing_for_level(child_level)
+        
         # Arrange children horizontally first. Use a second row only when there are more than 3 children.
         num_children = len(children)
         if num_children <= 3:
@@ -189,11 +206,11 @@ class HierarchicalLayout:
         
         top_width = sum(self.subtree_sizes[child][0] for child in top_children)
         if len(top_children) > 1:
-            top_width += self.HORIZONTAL_SPACING * (len(top_children) - 1)
+            top_width += child_spacing * (len(top_children) - 1)
         
         bottom_width = sum(self.subtree_sizes[child][0] for child in bottom_children)
         if len(bottom_children) > 1:
-            bottom_width += self.HORIZONTAL_SPACING * (len(bottom_children) - 1)
+            bottom_width += child_spacing * (len(bottom_children) - 1)
         
         top_row_start_x = x - top_width / 2
         child_y_offset = y + self.VERTICAL_SPACING * direction
@@ -203,7 +220,7 @@ class HierarchicalLayout:
             child_width = self.subtree_sizes[child_row_idx][0]
             child_x = current_x + child_width / 2
             self._layout_unit_recursive(child_row_idx, child_x, child_y_offset, direction=direction)
-            current_x += child_width + self.HORIZONTAL_SPACING
+            current_x += child_width + child_spacing
         
         bottom_height = 0.0
         if bottom_children:
@@ -216,7 +233,7 @@ class HierarchicalLayout:
                 child_width = self.subtree_sizes[child_row_idx][0]
                 child_x = current_x + child_width / 2
                 self._layout_unit_recursive(child_row_idx, child_x, bottom_y_offset, direction=direction)
-                current_x += child_width + self.HORIZONTAL_SPACING
+                current_x += child_width + child_spacing
             bottom_height = max(self.subtree_sizes[child][1] for child in bottom_children)
 
         top_height = max(self.subtree_sizes[child][1] for child in top_children) if top_children else 0.0
@@ -230,3 +247,22 @@ class HierarchicalLayout:
         """Get the hierarchy level of a unit."""
         row = self.data.get_row(row_index)
         return self.data.get_level_from_hierarchy(row)
+
+    def _get_horizontal_spacing_for_level(self, level: int) -> float:
+        """
+        Get the horizontal spacing between siblings at a given hierarchy level.
+        
+        Higher-level (lower level number) items have more spacing to separate
+        their subtrees from neighboring subtrees.
+        
+        Args:
+            level: The hierarchy level (1 is root, 6 is typical leaf level)
+        
+        Returns:
+            The horizontal spacing in logical units
+        """
+        # Level 6 uses base spacing, each level above gets additional spacing
+        if level >= 6:
+            return self.HORIZONTAL_SPACING
+        spacing_multiplier = 6 - level
+        return self.HORIZONTAL_SPACING + (spacing_multiplier * self.HORIZONTAL_SPACING_INCREMENT)

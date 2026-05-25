@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QGraphicsItem
 from PySide6.QtCore import Qt, QRect, QPointF, QSize
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont
+from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QTextDocument, QTextOption
 import math
 
 
@@ -45,7 +45,7 @@ class UnitGraphicsItem(QGraphicsItem):
     
     # Star size constants (in logical units)
     STAR_SIZE = 12
-    BASE_SIZE = 60  # Base size for non-star shapes
+    BASE_SIZE = 100  # Base size for non-star shapes
     
     # Color constants
     COLOR_SIDE_1 = QColor("#2c5aa0")  # Blue for French
@@ -87,7 +87,13 @@ class UnitGraphicsItem(QGraphicsItem):
     
     def get_side_color(self) -> QColor:
         """Return the color for this unit's side."""
-        return self.COLOR_SIDE_1 if self.side == 1 else self.COLOR_SIDE_2
+        base_color = self.COLOR_SIDE_1 if self.side == 1 else self.COLOR_SIDE_2
+        if self.is_selected:
+            return base_color.lighter(150)  # Lighten color when selected
+        elif self.is_hovered:
+            return base_color.lighter(120)  # Slightly lighten on hover
+        else:
+            return base_color
     
     def get_border_color(self) -> QColor:
         """Return the border color based on selection/hover state."""
@@ -111,16 +117,59 @@ class UnitGraphicsItem(QGraphicsItem):
         raise NotImplementedError("Subclasses must implement draw_shape")
     
     def draw_text(self, painter: QPainter):
-        """Draw the unit name as text centered on the shape."""
-        # Simple centered text
+        """Draw the unit name as text below the shape with word wrapping."""
         font = QFont("Arial", 8)
         painter.setFont(font)
         painter.setPen(QPen(self.COLOR_TEXT))
         
-        # Get bounding rect and draw text centered
+        # Get bounding rect for text
         rect = self.boundingRect()
-        painter.drawText(rect, Qt.AlignCenter, self.name)
+        
+        # Use QTextDocument for word wrapping
+        doc = QTextDocument()
+        doc.setPlainText(self.name)
+        doc.setDefaultFont(font)
+        
+        # Set text options for word wrapping
+        text_option = QTextOption()
+        text_option.setWrapMode(QTextOption.WordWrap)
+        text_option.setAlignment(Qt.AlignCenter)
+        doc.setDefaultTextOption(text_option)
+        
+        # Layout the document to fit the rect width
+        doc.setTextWidth(rect.width() - 4)
+        
+        # Draw text below the shape
+        painter.save()
+        
+        # Position text below the shape
+        text_height = doc.size().height()
+        text_x = rect.left()
+        text_y = rect.bottom()  # 2 pixels below the shape
+        
+        painter.translate(text_x, text_y)
+        doc.drawContents(painter, QRect(0, 0, int(rect.width() - 4), int(text_height)))
+        
+        painter.restore()
     
+    def _draw_stars(self, painter: QPainter, n: int):
+        """Draw n stars in a horizontal line."""
+        center = QPointF(0, 0)
+        spacing = self.STAR_SIZE * 1.3
+        color = self.get_side_color()
+        border_color = self.get_border_color()
+        
+        # Arrange n stars horizontally
+        for i in range(n):
+            x = center.x() + (i - (n - 1) / 2) * spacing
+            y = center.y()
+            draw_star(painter, QPointF(x, y), self.STAR_SIZE, color, border_color)
+    
+    def boundingRect(self):
+        """Return the bounding rectangle (for all star shapes)."""
+        size = self.STAR_SIZE * 3.5
+        return QRect(-int(size*3), -int(size/3), int(size * 6), int(size/2))
+
     def mousePressEvent(self, event):
         """Handle mouse click on the item."""
         self.is_selected = True
@@ -146,109 +195,48 @@ class UnitGraphicsItem(QGraphicsItem):
 class StarLevel1Item(UnitGraphicsItem):
     """Level 1 (Side): 5 stars arranged in a tight circle."""
     
-    def boundingRect(self):
-        """Return the bounding rectangle."""
-        size = self.STAR_SIZE * 3.5
-        return QRect(-int(size), -int(size), int(size * 2), int(size * 2))
-    
     def draw_shape(self, painter: QPainter):
-        """Draw 5 stars in a tight circle."""
-        center = QPointF(0, 0)
-        radius = self.STAR_SIZE * 1.2
-        color = self.get_side_color()
-        border_color = self.get_border_color()
+        self._draw_stars(painter, 5)
+        # """Draw 5 stars in a tight circle."""
+        # center = QPointF(0, 0)
+        # radius = self.STAR_SIZE * 1.2
+        # color = self.get_side_color()
+        # border_color = self.get_border_color()
         
-        # Arrange 5 stars in a circle
-        for i in range(5):
-            angle = (2 * math.pi * i) / 5 - math.pi / 2
-            x = center.x() + radius * math.cos(angle)
-            y = center.y() + radius * math.sin(angle)
-            draw_star(painter, QPointF(x, y), self.STAR_SIZE, color, border_color)
+        # # Arrange 5 stars in a circle
+        # for i in range(5):
+        #     angle = (2 * math.pi * i) / 5 - math.pi / 2
+        #     x = center.x() + radius * math.cos(angle)
+        #     y = center.y() + radius * math.sin(angle)
+        #     draw_star(painter, QPointF(x, y), self.STAR_SIZE, color, border_color)
 
 
 class StarLevel2Item(UnitGraphicsItem):
     """Level 2 (Army): 4 stars in a tight horizontal line."""
     
-    def boundingRect(self):
-        """Return the bounding rectangle."""
-        width = self.STAR_SIZE * 5.5
-        height = self.STAR_SIZE * 2.5
-        return QRect(-int(width/2), -int(height/2), int(width), int(height))
-    
     def draw_shape(self, painter: QPainter):
-        """Draw 4 stars in a horizontal line."""
-        center = QPointF(0, 0)
-        spacing = self.STAR_SIZE * 0.8
-        color = self.get_side_color()
-        border_color = self.get_border_color()
-        
-        # Arrange 4 stars horizontally
-        for i in range(4):
-            x = center.x() + (i - 1.5) * spacing
-            y = center.y()
-            draw_star(painter, QPointF(x, y), self.STAR_SIZE, color, border_color)
+        self._draw_stars(painter, 4)
 
 
 class StarLevel3Item(UnitGraphicsItem):
     """Level 3 (Corps): 3 stars in a tight horizontal line."""
     
-    def boundingRect(self):
-        """Return the bounding rectangle."""
-        width = self.STAR_SIZE * 4.5
-        height = self.STAR_SIZE * 2.5
-        return QRect(-int(width/2), -int(height/2), int(width), int(height))
-    
     def draw_shape(self, painter: QPainter):
-        """Draw 3 stars in a horizontal line."""
-        center = QPointF(0, 0)
-        spacing = self.STAR_SIZE * 0.8
-        color = self.get_side_color()
-        border_color = self.get_border_color()
-        
-        # Arrange 3 stars horizontally
-        for i in range(3):
-            x = center.x() + (i - 1) * spacing
-            y = center.y()
-            draw_star(painter, QPointF(x, y), self.STAR_SIZE, color, border_color)
+        self._draw_stars(painter, 3)
 
 
 class StarLevel4Item(UnitGraphicsItem):
     """Level 4 (Division): 2 stars in a tight horizontal line."""
-    
-    def boundingRect(self):
-        """Return the bounding rectangle."""
-        width = self.STAR_SIZE * 3.5
-        height = self.STAR_SIZE * 2.5
-        return QRect(-int(width/2), -int(height/2), int(width), int(height))
-    
+
     def draw_shape(self, painter: QPainter):
-        """Draw 2 stars in a horizontal line."""
-        center = QPointF(0, 0)
-        spacing = self.STAR_SIZE * 0.8
-        color = self.get_side_color()
-        border_color = self.get_border_color()
-        
-        # Arrange 2 stars horizontally
-        for i in range(2):
-            x = center.x() + (i - 0.5) * spacing
-            y = center.y()
-            draw_star(painter, QPointF(x, y), self.STAR_SIZE, color, border_color)
+        self._draw_stars(painter, 2)
 
 
 class StarLevel5Item(UnitGraphicsItem):
     """Level 5 (Brigade): 1 star."""
     
-    def boundingRect(self):
-        """Return the bounding rectangle."""
-        size = self.STAR_SIZE * 1.8
-        return QRect(-int(size), -int(size), int(size * 2), int(size * 2))
-    
     def draw_shape(self, painter: QPainter):
-        """Draw 1 star."""
-        center = QPointF(0, 0)
-        color = self.get_side_color()
-        border_color = self.get_border_color()
-        draw_star(painter, center, self.STAR_SIZE, color, border_color)
+        self._draw_stars(painter, 1)
 
 
 class RectangleItem(UnitGraphicsItem):
@@ -257,7 +245,7 @@ class RectangleItem(UnitGraphicsItem):
     def boundingRect(self):
         """Return the bounding rectangle."""
         width = self.BASE_SIZE
-        height = self.BASE_SIZE * 0.7  # Slightly shorter than wide
+        height = self.BASE_SIZE * 0.6  # Slightly shorter than wide
         return QRect(-width // 2, -height // 2, width, height)
     
     def draw_shape(self, painter: QPainter):
@@ -271,6 +259,41 @@ class RectangleItem(UnitGraphicsItem):
         pen = QPen(self.get_border_color(), 2)
         painter.setPen(pen)
         painter.drawRect(rect)
+    
+    def draw_text(self, painter: QPainter):
+        """Draw the unit name centered on the rectangle."""
+        font = QFont("Arial", 8)
+        painter.setFont(font)
+        painter.setPen(QPen(self.COLOR_TEXT))
+        
+        # Get bounding rect for text
+        rect = self.boundingRect()
+        
+        # Use QTextDocument for word wrapping
+        doc = QTextDocument()
+        doc.setPlainText(self.name)
+        doc.setDefaultFont(font)
+        
+        # Set text options for word wrapping
+        text_option = QTextOption()
+        text_option.setWrapMode(QTextOption.WordWrap)
+        text_option.setAlignment(Qt.AlignCenter)
+        doc.setDefaultTextOption(text_option)
+        
+        # Layout the document to fit the rect width
+        doc.setTextWidth(rect.width() - 4)
+        
+        # Center the text vertically and horizontally on the rectangle
+        painter.save()
+        
+        # Calculate offset to center the text block
+        text_height = doc.size().height()
+        y_offset = -text_height / 2
+        
+        painter.translate(rect.left(), y_offset)
+        doc.drawContents(painter, QRect(0, 0, int(rect.width() - 4), int(text_height)))
+        
+        painter.restore()
 
 
 def get_shape_class_for_level(level: int):
