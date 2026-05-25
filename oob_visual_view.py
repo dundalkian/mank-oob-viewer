@@ -77,9 +77,10 @@ class OOBVisualWidget(QWidget):
             level = self.data.get_level_from_hierarchy(row)
             side = int(row.get("SIDE 1", 1))
             name = str(row.get("NAME1", "Unknown"))
+            formation = str(row.get("Formation", ""))
             
             # Get appropriate shape class
-            shape_class = get_shape_class_for_level(level)
+            shape_class = get_shape_class_for_level(level, formation)
             
             # Create graphics item
             item = shape_class(
@@ -116,7 +117,7 @@ class OOBVisualWidget(QWidget):
     
     def highlight_unit(self, row_index: int) -> None:
         """
-        Highlight a unit in the visual view (called when tree selection changes).
+        Highlight a unit and all its subordinates in the visual view (called when tree selection changes).
         
         Args:
             row_index: The row index of the unit to highlight
@@ -125,12 +126,20 @@ class OOBVisualWidget(QWidget):
         for item in self.items_by_row_index.values():
             if isinstance(item, UnitGraphicsItem):
                 item.set_selected(False)
+                item.set_highlighted(False)
         
-        # Select the target unit
-        if row_index in self.items_by_row_index:
-            item = self.items_by_row_index[row_index]
-            if isinstance(item, UnitGraphicsItem):
-                item.set_selected(True)
+        # Get all subordinate row indices
+        try:
+            subordinate_indices = self.data.get_subordinate_row_indices(row_index)
+        except (ValueError, Exception):
+            subordinate_indices = [row_index]
+        
+        # Select the target unit and all subordinates
+        for idx in subordinate_indices:
+            if idx in self.items_by_row_index:
+                item = self.items_by_row_index[idx]
+                if isinstance(item, UnitGraphicsItem):
+                    item.set_highlighted(True)
 
     def _on_reset_view(self) -> None:
         """Reset the visual scene to its full bounds."""

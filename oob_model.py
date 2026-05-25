@@ -156,6 +156,52 @@ class OOBData:
         
         return "Unknown"
     
+    def get_subordinate_row_indices(self, row_index: int) -> List[int]:
+        """
+        Get all subordinate row indices for a given unit.
+        
+        Args:
+            row_index: Index of the unit
+            
+        Returns:
+            List of row indices including the unit itself and all subordinates
+            
+        Raises:
+            ValueError: If row_index is invalid or hierarchy data is corrupted
+        """
+        if self.df is None:
+            raise ValueError("No data loaded")
+        
+        row = self.df.iloc[row_index]
+        hierarchy_key = self.get_hierarchy_key(row, row_index)
+        level = self.get_level_from_hierarchy(row)
+        
+        if level is None:
+            raise ValueError(f"Line {row_index + 2}: Cannot determine hierarchy level")
+        
+        # Find the unit itself and all its subordinates
+        subordinates = []
+        
+        for idx, df_row in self.df.iterrows():
+            try:
+                df_hierarchy_key = self.get_hierarchy_key(df_row, idx)
+                
+                # Check if this row is a subordinate or the unit itself
+                # by comparing the first N positions of the hierarchy key
+                is_match = True
+                for i in range(level):
+                    if hierarchy_key[i] != df_hierarchy_key[i]:
+                        is_match = False
+                        break
+                
+                if is_match:
+                    subordinates.append(idx)
+            except ValueError:
+                # Skip rows with invalid hierarchy data
+                pass
+        
+        return subordinates
+    
     def delete_unit(self, row_index: int) -> int:
         """
         Delete a unit and all its subordinates from the dataframe.

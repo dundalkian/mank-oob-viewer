@@ -80,8 +80,10 @@ class OOBDetailsWidget(QWidget):
             self.details_table.setItem(i, 0, field_item)
             self.details_table.setItem(i, 1, value_item)
         
-        self.details_table.resizeColumnsToContents()
+        # Resize rows to fit content
         self.details_table.resizeRowsToContents()
+        # Resize first column to fit content, let second column stretch to fill space
+        self.details_table.resizeColumnToContents(0)
     
     def clear(self) -> None:
         """Clear the detail view."""

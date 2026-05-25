@@ -44,15 +44,16 @@ class UnitGraphicsItem(QGraphicsItem):
     
     
     # Star size constants (in logical units)
-    STAR_SIZE = 12
+    STAR_SIZE = 20
     BASE_SIZE = 100  # Base size for non-star shapes
     
     # Color constants
     COLOR_SIDE_1 = QColor("#2c5aa0")  # Blue for French
     COLOR_SIDE_2 = QColor("#a02c2c")  # Red for Allied
-    COLOR_BORDER_NORMAL = QColor("#ffffff")
+    COLOR_BORDER_NORMAL = QColor("#aaaaaa")
     COLOR_BORDER_SELECTED = QColor("#ffff00")  # Yellow highlight
     COLOR_BORDER_HOVER = QColor("#64b5f6")     # Light blue hover
+    COLOR_BORDER_HIGHLIGHTED = QColor("#ffffff")  # White for highlighted (but not selected)
     COLOR_TEXT = QColor("#ffffff")
     
     def __init__(self, name: str, unit_row_index: int, side: int, level: int, parent=None):
@@ -73,6 +74,7 @@ class UnitGraphicsItem(QGraphicsItem):
         self.side = side
         self.level = level
         self.is_selected = False
+        self.is_highlighted = False # When highlighted due to parent unit selection.
         self.is_hovered = False
         
         # Store row index as item data for easy retrieval
@@ -92,6 +94,8 @@ class UnitGraphicsItem(QGraphicsItem):
             return base_color.lighter(150)  # Lighten color when selected
         elif self.is_hovered:
             return base_color.lighter(120)  # Slightly lighten on hover
+        elif self.is_highlighted:
+            return base_color.lighter(130)  # Lighten when highlighted
         else:
             return base_color
     
@@ -101,6 +105,8 @@ class UnitGraphicsItem(QGraphicsItem):
             return self.COLOR_BORDER_SELECTED
         elif self.is_hovered:
             return self.COLOR_BORDER_HOVER
+        elif self.is_highlighted:
+            return self.COLOR_BORDER_HIGHLIGHTED
         else:
             return self.COLOR_BORDER_NORMAL
     
@@ -168,7 +174,7 @@ class UnitGraphicsItem(QGraphicsItem):
     def boundingRect(self):
         """Return the bounding rectangle (for all star shapes)."""
         size = self.STAR_SIZE * 3.5
-        return QRect(-int(size*3), -int(size/3), int(size * 6), int(size/2))
+        return QRect(-int(size*2), -int(size/3), int(size * 4), int(size/2))
 
     def mousePressEvent(self, event):
         """Handle mouse click on the item."""
@@ -189,6 +195,11 @@ class UnitGraphicsItem(QGraphicsItem):
     def set_selected(self, selected: bool):
         """Set selection state (called from external selection sync)."""
         self.is_selected = selected
+        self.update()
+    
+    def set_highlighted(self, highlighted: bool):
+        """Set highlight state (called from external selection sync)."""
+        self.is_highlighted = highlighted
         self.update()
 
 
@@ -295,17 +306,186 @@ class RectangleItem(UnitGraphicsItem):
         
         painter.restore()
 
+class ArtilleryItem(UnitGraphicsItem):
+    """Cannon viewed from above with wheels, connecting pieces, and barrel."""
+    
+    def boundingRect(self):
+        """Return the bounding rectangle."""
+        width = self.BASE_SIZE * 1.2
+        height = self.BASE_SIZE * 0.7
+        return QRect(-width // 2, -height // 2, width, height)
+    
+    def draw_shape(self, painter: QPainter):
+        """Draw a cannon from above: barrel, wheels, and connectors."""
+        color = self.get_side_color()
+        border_color = self.get_border_color()
+        
+        # Central long rectangle (barrel)
+        barrel_width = 15
+        barrel_height = 60
+        barrel_rect = QRect(-barrel_width // 2, -barrel_height // 2, barrel_width, barrel_height)
+        
+        painter.fillRect(barrel_rect, QBrush(color))
+        painter.setPen(QPen(border_color, 2))
+        painter.drawRect(barrel_rect)
+        
+        # Left wheel
+        wheel_width = 10
+        wheel_height = 25
+        left_wheel_rect = QRect(-barrel_width // 2 - wheel_width - 5, -wheel_height // 2, wheel_width, wheel_height)
+        painter.fillRect(left_wheel_rect, QBrush(color))
+        painter.drawRect(left_wheel_rect)
+        
+        # Right wheel
+        right_wheel_rect = QRect(barrel_width // 2 + 5, -wheel_height // 2, wheel_width, wheel_height)
+        painter.fillRect(right_wheel_rect, QBrush(color))
+        painter.drawRect(right_wheel_rect)
+        
+        # Left connector
+        left_connector_rect = QRect(-barrel_width // 2 - 5, -8, 5, 16)
+        painter.fillRect(left_connector_rect, QBrush(color))
+        painter.drawRect(left_connector_rect)
+        
+        # Right connector
+        right_connector_rect = QRect(barrel_width // 2, -8, 5, 16)
+        painter.fillRect(right_connector_rect, QBrush(color))
+        painter.drawRect(right_connector_rect)
+    
+    def draw_text(self, painter: QPainter):
+        """Draw the unit name below the cannon."""
+        pass # A little glitchy right now, plus, who cares about cannon names?
+        # font = QFont("Arial", 7)
+        # painter.setFont(font)
+        # painter.setPen(QPen(self.COLOR_TEXT))
+        
+        # rect = self.boundingRect()
+        
+        # # Use QTextDocument for word wrapping
+        # doc = QTextDocument()
+        # doc.setPlainText(self.name)
+        # doc.setDefaultFont(font)
+        
+        # # Set text options for word wrapping
+        # text_option = QTextOption()
+        # text_option.setWrapMode(QTextOption.WordWrap)
+        # text_option.setAlignment(Qt.AlignCenter)
+        # doc.setDefaultTextOption(text_option)
+        
+        # # Layout the document to fit the rect width
+        # doc.setTextWidth(rect.width() - 4)
+        
+        # # Draw text below the shape
+        # painter.save()
+        # text_height = doc.size().height()
+        # text_x = rect.left()
+        # text_y = rect.bottom()
+        
+        # painter.translate(text_x, text_y)
+        # doc.drawContents(painter, QRect(0, 0, int(rect.width() - 4), int(text_height)))
+        
+        # painter.restore()
 
-def get_shape_class_for_level(level: int):
+
+class WagonItem(UnitGraphicsItem):
+    """Wagon with large central rectangle and four small wheels around it."""
+    
+    def boundingRect(self):
+        """Return the bounding rectangle."""
+        width = self.BASE_SIZE * 1.1
+        height = self.BASE_SIZE * 1.1
+        return QRect(-width // 2, -height // 2, width, height)
+    
+    def draw_shape(self, painter: QPainter):
+        """Draw a wagon with central body and four wheels."""
+        color = self.get_side_color()
+        border_color = self.get_border_color()
+        
+        # Central large rectangle (wagon body)
+        body_width = 36
+        body_height = 100
+        body_rect = QRect(-body_width // 2, -body_height // 2, body_width, body_height)
+        
+        painter.fillRect(body_rect, QBrush(color))
+        painter.setPen(QPen(border_color, 2))
+        painter.drawRect(body_rect)
+        
+        # Wheel dimensions
+        wheel_height = 20
+        wheel_width = 8
+        wheel_offset_x = body_width // 2 + 8
+        wheel_offset_y = body_height // 2 - 8
+        
+        # Top-left wheel
+        tl_wheel = QRect(-wheel_offset_x, -wheel_offset_y, wheel_width, wheel_height)
+        painter.fillRect(tl_wheel, QBrush(color))
+        painter.drawRect(tl_wheel)
+        
+        # Top-right wheel
+        tr_wheel = QRect(wheel_offset_x - wheel_width, -wheel_offset_y, wheel_width, wheel_height)
+        painter.fillRect(tr_wheel, QBrush(color))
+        painter.drawRect(tr_wheel)
+        
+        # Bottom-left wheel
+        bl_wheel = QRect(-wheel_offset_x, wheel_offset_y - wheel_height, wheel_width, wheel_height)
+        painter.fillRect(bl_wheel, QBrush(color))
+        painter.drawRect(bl_wheel)
+        
+        # Bottom-right wheel
+        br_wheel = QRect(wheel_offset_x - wheel_width, wheel_offset_y - wheel_height, wheel_width, wheel_height)
+        painter.fillRect(br_wheel, QBrush(color))
+        painter.drawRect(br_wheel)
+    
+    def draw_text(self, painter: QPainter):
+        """Draw the unit name centered on the wagon."""
+        font = QFont("Arial", 7)
+        painter.setFont(font)
+        painter.setPen(QPen(self.COLOR_TEXT))
+        
+        rect = self.boundingRect()
+        
+        # Use QTextDocument for word wrapping
+        doc = QTextDocument()
+        doc.setPlainText(self.name)
+        doc.setDefaultFont(font)
+        
+        # Set text options for word wrapping
+        text_option = QTextOption()
+        text_option.setWrapMode(QTextOption.WordWrap)
+        text_option.setAlignment(Qt.AlignCenter)
+        doc.setDefaultTextOption(text_option)
+        
+        # Layout the document to fit the rect width
+        doc.setTextWidth(rect.width() - 4)
+        
+        # Center the text vertically and horizontally on the rectangle
+        painter.save()
+        
+        # Calculate offset to center the text block
+        text_height = doc.size().height()
+        y_offset = -text_height / 2
+        
+        painter.translate(rect.left(), y_offset)
+        doc.drawContents(painter, QRect(0, 0, int(rect.width() - 4), int(text_height)))
+        
+        painter.restore()
+
+def get_shape_class_for_level(level: int, formation: str = ""):
     """
     Get the appropriate shape class for a given hierarchy level.
     
     Args:
         level: Hierarchy level (1-6)
+        formation: Formation string (optional). For level 6, if formation contains "Art", returns ArtilleryItem.
     
     Returns:
         Shape class for the given level (StarLevel1Item, StarLevel2Item, etc., or RectangleItem for level 6)
     """
+    # Special case for level 6: check formation for Artillery
+    if level == 6 and "Art" in formation:
+        return ArtilleryItem
+    elif "SupplyWagon" in formation:
+        return WagonItem
+    
     shape_map = {
         1: StarLevel1Item,
         2: StarLevel2Item,
