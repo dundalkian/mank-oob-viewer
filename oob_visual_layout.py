@@ -1,6 +1,5 @@
 from typing import Dict, Tuple, List, Optional
 from oob_model import OOBData
-from oob_visual_shapes import get_shape_class_for_level
 
 
 class HierarchicalLayout:
@@ -26,8 +25,11 @@ class HierarchicalLayout:
         self.data = data
         self.positions: Dict[int, Tuple[float, float]] = {}  # row_index -> (x, y)
         self.subtree_sizes: Dict[int, Tuple[float, float]] = {}  # row_index -> (width, height)
-        self.parent_to_children: Dict[int, List[int]] = {}  # Pre-built index for efficiency
-    
+        self.parent_to_children: Dict[int, List[int]] = {}  # parent row index -> child row indices
+        self.row_keys: List[Tuple[int, ...]] = []  # cached hierarchy keys for each row
+        self.row_sides: List[int] = []  # cached side value for each row
+        self.child_indices: set = set()  # all rows that are known children
+
     def calculate_layout(self, root_row_index: Optional[int] = None) -> Dict[int, Tuple[float, float]]:
         """
         Calculate positions for all units starting from root or specified unit.
@@ -41,24 +43,19 @@ class HierarchicalLayout:
         """
         self.positions = {}
         self.subtree_sizes = {}
-        
-        # Build parent-to-children index for efficient lookup
+
+        # Build parent-to-children index and cache hierarchy data.
         self._build_parent_child_index()
-        
-        # Find the highest-level units (those with no parents)
-        root_units = []
-        for idx in range(len(self.data.df)):
-            if idx not in [child for children in self.parent_to_children.values() for child in children]:
-                # This unit is not a child of any other unit, so it's a root
-                root_units.append(idx)
-        
+
+        # Root units are those that are not children of any other row.
+        all_indices = set(range(len(self.data.df)))
+        root_units = sorted(all_indices - self.child_indices)
+
         # Split roots by side so Side 2 is drawn from the top and Side 1 is drawn from below.
         side1_roots = []
         side2_roots = []
         for unit_idx in root_units:
-            row = self.data.get_row(unit_idx)
-            side = int(row.get("SIDE 1", 1))
-            if side == 2:
+            if self.row_sides[unit_idx] == 2:
                 side2_roots.append(unit_idx)
             else:
                 side1_roots.append(unit_idx)
@@ -91,38 +88,31 @@ class HierarchicalLayout:
     
     def _build_parent_child_index(self):
         """Pre-build a mapping of parent units to their children for efficiency."""
-        self.parent_to_children = {i: [] for i in range(len(self.data.df))}
-        
-        for idx in range(len(self.data.df)):
-            child_row = self.data.get_row(idx)
-            child_key = self.data.get_hierarchy_key(child_row, idx)
-            
-            # Find the parent by zeroing out the last non-zero position
-            parent_key = list(child_key)
-            parent_found = False
-            
-            # Try zeroing positions from right to left to find parent
-            for i in range(5, -1, -1):
-                if parent_key[i] != 0:
-                    parent_key[i] = 0
-                    parent_found = True
-                    break
-            
-            if not parent_found:
-                continue  # Root unit, no parent
-            
-            parent_key = tuple(parent_key)
-            
-            # Find parent unit with matching key
-            for parent_idx in range(len(self.data.df)):
-                if parent_idx == idx:
-                    continue
-                parent_row = self.data.get_row(parent_idx)
-                parent_row_key = self.data.get_hierarchy_key(parent_row, parent_idx)
-                
-                if parent_row_key == parent_key:
-                    self.parent_to_children[parent_idx].append(idx)
-                    break
+        row_count = len(self.data.df)
+        self.parent_to_children = {i: [] for i in range(row_count)}
+        self.row_keys = []
+        self.row_sides = []
+        self.child_indices = set()
+
+        key_to_index: Dict[Tuple[int, ...], int] = {}
+        for idx in range(row_count):
+            row = self.data.get_row(idx)
+            hierarchy_key = self.data.get_hierarchy_key(row, idx)
+            key_to_index[hierarchy_key] = idx
+            self.row_keys.append(hierarchy_key)
+
+            side_value = row.get("SIDE 1", 1)
+            try:
+                self.row_sides.append(int(side_value))
+            except (TypeError, ValueError):
+                self.row_sides.append(1)
+
+        for idx, hierarchy_key in enumerate(self.row_keys):
+            parent_key = self.data.get_parent_key(hierarchy_key)
+            parent_idx = key_to_index.get(parent_key)
+            if parent_idx is not None and parent_idx != idx:
+                self.parent_to_children[parent_idx].append(idx)
+                self.child_indices.add(idx)
 
     def _compute_subtree_size(self, row_index: int) -> Tuple[float, float]:
         """Compute the logical size of a unit's subtree."""
