@@ -105,7 +105,7 @@ class OOBTreeWidget(QTreeWidget):
                 name = str(row.get("NAME1", "Unknown"))
                 strength = row.get("Head Count", "")
                 level_info = self.data.get_hierarchy_level_name_and_index(hierarchy_key)
-                line_num = idx + 2  # +1 for header, +1 for 1-based indexing
+                line_num = int(row.get("line_number", idx + 2))
                 side = int(row.get("SIDE 1", 0) or 0)
                 
                 items_data.append({

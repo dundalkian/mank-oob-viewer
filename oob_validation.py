@@ -61,7 +61,7 @@ class OOBValidator:
             if (has_some_maneuver and has_some_command) or not (has_all_maneuver or has_all_command or 
                                                                   (str(row.get("Formation", "")) == "DRIL_SupplyWagon")):
                 unit_name = str(row.get("NAME1", "Unknown"))
-                line_num = idx + 2  # +1 for header, +1 for 1-based indexing
+                line_num = int(row.get("line_number", idx + 2))
                 errors.append(
                     f"Line {line_num}: '{unit_name}' has both maneuver and command stats.\n"
                     f"Maneuver stats present: {has_some_maneuver}, Command stats present: {has_some_command}.\n"
@@ -100,7 +100,7 @@ class OOBValidator:
             
             formation = str(row.get("Formation", ""))
             unit_name = str(row.get("NAME1", "Unknown"))
-            line_num = idx + 2  # +1 for header, +1 for 1-based indexing
+            line_num = int(row.get("line_number", idx + 2))
             
             # Special case: Supply wagons are valid at level 5 as supply wagons, 
             # or level 3 as couriers. Don't flag in either case.

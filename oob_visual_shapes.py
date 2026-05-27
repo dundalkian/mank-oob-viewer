@@ -45,7 +45,7 @@ class UnitGraphicsItem(QGraphicsItem):
     
     # Star size constants (in logical units)
     STAR_SIZE = 20
-    BASE_SIZE = 100  # Base size for non-star shapes
+    BASE_SIZE = 200  # Base size for non-star shapes
     
     # Color constants
     COLOR_SIDE_1 = QColor("#2c5aa0")  # Blue for French
@@ -124,7 +124,7 @@ class UnitGraphicsItem(QGraphicsItem):
     
     def draw_text(self, painter: QPainter):
         """Draw the unit name as text below the shape with word wrapping."""
-        font = QFont("Arial", 8)
+        font = QFont("Arial", 12)
         painter.setFont(font)
         painter.setPen(QPen(self.COLOR_TEXT))
         
@@ -256,7 +256,7 @@ class RectangleItem(UnitGraphicsItem):
     def boundingRect(self):
         """Return the bounding rectangle."""
         width = self.BASE_SIZE
-        height = self.BASE_SIZE * 0.6  # Slightly shorter than wide
+        height = self.BASE_SIZE * 0.4  # Slightly shorter than wide
         return QRect(-width // 2, -height // 2, width, height)
     
     def draw_shape(self, painter: QPainter):
@@ -273,7 +273,7 @@ class RectangleItem(UnitGraphicsItem):
     
     def draw_text(self, painter: QPainter):
         """Draw the unit name centered on the rectangle."""
-        font = QFont("Arial", 8)
+        font = QFont("Arial", 12)
         painter.setFont(font)
         painter.setPen(QPen(self.COLOR_TEXT))
         
@@ -437,7 +437,7 @@ class WagonItem(UnitGraphicsItem):
     
     def draw_text(self, painter: QPainter):
         """Draw the unit name centered on the wagon."""
-        font = QFont("Arial", 7)
+        font = QFont("Arial", 12)
         painter.setFont(font)
         painter.setPen(QPen(self.COLOR_TEXT))
         

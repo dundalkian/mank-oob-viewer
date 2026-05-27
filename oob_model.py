@@ -5,15 +5,98 @@ from typing import Tuple, List, Optional, Dict
 class OOBData:
     """
     Handles CSV I/O, dataframe management, and hierarchy operations for Order of Battle data.
+    
+    Column aliases: each internal column name can have multiple valid alternate names
+    in CSV files. On load, detected aliases are normalized to internal names.
+    On save, the original file's headers are restored (or defaults if no file was loaded).
     """
+    
+    # Internal name -> list of valid alternate names (case-insensitive matching)
+    # This is importants for Gettysburg and Waterloo OOBs which have different column conventions.
+    COLUMN_ALIASES: Dict[str, List[str]] = {
+        "Name": ["name"],
+        "ID": ["id"],
+        "NAME1": ["name1"],
+        "NAME2": ["name2"],
+        "SIDE 1": ["side 1", "side"],
+        "ARMY 2": ["army 2", "army"],
+        "CORPS 3": ["corps 3", "corps"],
+        "DIV 4": ["div 4", "div"],
+        "BGDE 5": ["bgde 5", "bgde"],
+        "BTN 6": ["btn 6", "btn", "reg"],
+        "CLASS": ["class"],
+        "PORTRAIT": ["portrait"],
+        "Weapon": ["weapon"],
+        "AMMO": ["ammo"],
+        "FLAGS": ["flags"],
+        "FLAG2": ["flag2"],
+        "Formation": ["formation"],
+        "Head Count": ["head count"],
+        "Ability": ["ability"],
+        "Command": ["command"],
+        "Control": ["control"],
+        "Leadership": ["leadership"],
+        "Style": ["style"],
+        "Experience": ["experience"],
+        "Fatigue": ["fatigue"],
+        "Morale": ["morale"],
+        "Close": ["close"],
+        "Open": ["open"],
+        "Edged": ["edged"],
+        "Firearm": ["firearm"],
+        "Marksmanship": ["marksmanship"],
+        "Horsemanship": ["horsemanship"],
+        "Surgeon": ["surgeon"],
+        "Calisthenics": ["calisthenics"],
+    }
+    
+    # Reverse mapping: lowercase alias -> internal name
+    _ALIAS_MAP: Dict[str, str] = {}
     
     def __init__(self):
         self.df: Optional[pd.DataFrame] = None
         self.filepath: Optional[str] = None
+        self._original_headers: Optional[Dict[str, str]] = None  # internal_name -> original_csv_header
+        self._build_alias_map()
+    
+    def _build_alias_map(self):
+        """Build reverse lookup: lowercase alias -> internal name."""
+        self._ALIAS_MAP = {}
+        for internal, aliases in self.COLUMN_ALIASES.items():
+            for alias in aliases:
+                self._ALIAS_MAP[alias.strip().lower()] = internal
+    
+    def _normalize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Detect column aliases in the dataframe and rename them to internal names.
+        Stores the mapping from internal name -> original header for later save.
+        If multiple columns map to the same internal name, the first match wins.
+        """
+        self._original_headers = {}
+        renamed = {}
+        
+        for col in df.columns:
+            normalized = col.strip().lower()
+            if normalized in self._ALIAS_MAP:
+                internal_name = self._ALIAS_MAP[normalized]
+                renamed[col] = internal_name
+                self._original_headers[internal_name] = col
+                # else: skip duplicate — first match wins
+            else:
+                # Column has no alias mapping; keep as-is, store as its own header
+                self._original_headers[col] = col
+        
+        if renamed:
+            df = df.rename(columns=renamed)
+        
+        return df
     
     def load_csv(self, path: str) -> None:
         """
         Load CSV file into dataframe.
+        
+        Column aliases in the CSV header are automatically detected and normalized
+        to internal column names. The original headers are preserved for save.
         
         Args:
             path: Path to CSV file
@@ -21,8 +104,55 @@ class OOBData:
         Raises:
             ValueError: If file is missing required columns
         """
-        # Read CSV as strings, then convert numeric columns specifically to integers
-        self.df = pd.read_csv(path, encoding="cp1252", dtype=str).fillna("")
+        # Read file and filter out comment lines (lines starting with comma),
+        # tracking original CSV line numbers via a 'line_number' column.
+        with open(path, "r", encoding="cp1252") as f:
+            raw_lines = f.readlines()
+
+        # Identify the header line (first non-empty, non-comment line)
+        header_line = None
+        header_idx = None
+        for i, line in enumerate(raw_lines):
+            stripped = line.strip()
+            if stripped and not stripped.startswith(","):
+                header_line = line
+                header_idx = i
+                break
+
+        if header_line is None:
+            raise ValueError("CSV file has no valid header")
+
+        # Build filtered content: skip comment lines, but record original line numbers
+        data_lines = []
+        for i, line in enumerate(raw_lines):
+            stripped = line.strip()
+            if i == header_idx:
+                # Header line — prepend 'line_number' column name
+                if not line.strip().startswith("line_number"):
+                    data_lines.append(f"line_number,{line}" if line.strip() else line)
+                else:
+                    data_lines.append(line)
+            elif stripped and stripped.startswith(","):
+                # Comment line — skip entirely (no placeholder)
+                continue
+            elif stripped == "":
+                # Empty line — skip
+                continue
+            else:
+                # Data line — prepend original line number
+                data_lines.append(f"{i + 1},{line}")
+
+        from io import StringIO
+        csv_content = "".join(data_lines)
+        self.df = pd.read_csv(StringIO(csv_content), encoding="cp1252", dtype=str, header=0)
+        
+        # Rename the first column (line_number) to 'line_number' and fill NaN
+        if self.df.columns[0] != "line_number":
+            self.df.rename(columns={self.df.columns[0]: "line_number"}, inplace=True)
+        self.df["line_number"] = pd.to_numeric(self.df["line_number"], errors="coerce").fillna(0).astype(int)
+        
+        # Normalize column names (detect aliases, store original headers)
+        self.df = self._normalize_columns(self.df)
         
         int_columns = [
             "SIDE 1", "ARMY 2", "CORPS 3", "DIV 4", "BGDE 5", "BTN 6",
@@ -46,7 +176,10 @@ class OOBData:
     
     def save_csv(self, path: str) -> None:
         """
-        Save dataframe to CSV file.
+        Save dataframe to CSV file using the original file's column headers.
+        
+        If the data was loaded from a file, the original CSV headers are restored.
+        If no file was loaded (or headers were lost), default internal names are used.
         
         Args:
             path: Path to save CSV file to
@@ -57,7 +190,23 @@ class OOBData:
         if self.df is None:
             raise ValueError("No data loaded")
         
-        self.df.to_csv(path, encoding="cp1252", index=False)
+        df = self.df.copy()
+        
+        # Remove internal 'line_number' column before saving (it's not part of the CSV format)
+        if "line_number" in df.columns:
+            df = df.drop(columns=["line_number"])
+        
+        # Map internal names back to original headers
+        if self._original_headers:
+            # Build rename mapping: internal_name -> original_header
+            rename_map = {
+                internal: original
+                for internal, original in self._original_headers.items()
+                if internal in df.columns
+            }
+            df = df.rename(columns=rename_map)
+        
+        df.to_csv(path, encoding="cp1252", index=False)
         self.filepath = path
     
     def get_row(self, row_index: int) -> pd.Series:

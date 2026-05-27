@@ -11,7 +11,7 @@ class HierarchicalLayout:
     """
     
     # Layout constants (in logical units)
-    HORIZONTAL_SPACING = 52    # Base space between sibling units (at level 6)
+    HORIZONTAL_SPACING = 104    # Base space between sibling units (at level 6)
     HORIZONTAL_SPACING_INCREMENT = 20  # Additional spacing per level above level 6
     VERTICAL_SPACING = 75     # Space between parent and children
     ROW_VERTICAL_SPACING = 25  # Space between the two rows
