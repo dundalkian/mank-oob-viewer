@@ -17,12 +17,14 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QGraphicsScene,
     QGraphicsItem,
+    QMenu,
 )
-from PySide6.QtGui import QPixmap, QFont, QPainter, QImage, QPen, QBrush, QColor
-from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, Signal
+from PySide6.QtGui import QPixmap, QFont, QPainter, QImage, QPen, QBrush, QColor, QPainterPath, QPolygonF
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PIL import Image
 
 from utilities import get_tga_dimensions
+from formation_layout import calculate_road_formation, calculate_line_formation
 
 
 class OOBMapGraphicsView(QGraphicsView):
@@ -61,9 +63,6 @@ class OOBMapGraphicsView(QGraphicsView):
         """Handle mouse press."""
         if event.button() == Qt.MouseButton.MiddleButton:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            super().mousePressEvent(event)
-        elif self.map_widget.placement_mode:
-            self.map_widget.on_map_clicked(event)
             super().mousePressEvent(event)
         elif event.button() == Qt.MouseButton.LeftButton:
             # Check if clicked on an item
@@ -124,63 +123,93 @@ class OOBMapGraphicsView(QGraphicsView):
                 self.scene().clearSelection()
             super().mouseReleaseEvent(event)
     
+    def dragEnterEvent(self, event):
+        """Handle drag enter event."""
+        if event.mimeData().hasFormat("application/x-unit-drop"):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+    
+    def dragMoveEvent(self, event):
+        """Handle drag move event."""
+        if event.mimeData().hasFormat("application/x-unit-drop"):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+    
+    def dropEvent(self, event):
+        """Handle drop event to place units from tree view."""
+        if event.mimeData().hasFormat("application/x-unit-drop"):
+            mime_data = event.mimeData()
+            data = mime_data.data("application/x-unit-drop").data()
+            unit_data = eval(data.decode('utf-8'))  # Parse the unit data
+            
+            scene_pos = self.mapToScene(event.pos())
+            self.map_widget.place_unit_at_position(scene_pos, unit_data)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+    
+    def contextMenuEvent(self, event):
+        """Handle right-click context menu for formations."""
+        item = self.itemAt(event.pos())
+        
+        if isinstance(item, MapUnitItem):
+            # Right-click on a unit: show formation menu
+            self.map_widget.show_formation_context_menu(item, event.globalPos())
+            event.accept()
+        else:
+            super().contextMenuEvent(event)
+    
     def wheelEvent(self, event):
-        """Handle scroll wheel for rotation. Zoom disabled when unit is selected, which allows rotation instead. 
-        Placement mode locks both currently."""
-        if not self.map_widget.placement_mode:
-            items = self.scene().selectedItems()
-            if items:
-                # Rotate all selected items
-                angle_delta = event.angleDelta().y() / 8
-                for item in items:
-                    if isinstance(item, MapUnitItem):
-                        item.setRotation(item.rotation() + angle_delta)
-                event.accept()
-                return
-            else:
-                # Zoom in/out based on scroll wheel
-                zoom_factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-                self.scale(zoom_factor, zoom_factor)
-                event.accept()
-                return
-        super().wheelEvent(event)
+        """Handle scroll wheel for rotation or zoom."""
+        items = self.scene().selectedItems()
+        if items:
+            # Rotate all selected items
+            angle_delta = event.angleDelta().y() / 8
+            for item in items:
+                if isinstance(item, MapUnitItem):
+                    item.setRotation(item.rotation() + angle_delta)
+            event.accept()
+            return
+        else:
+            # Zoom in/out based on scroll wheel
+            zoom_factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+            self.scale(zoom_factor, zoom_factor)
+            event.accept()
+            return
 
 
 class MapUnitItem(QGraphicsItem):
     """
-    A map-placed unit representation on the minimap.
-    
-    Stores world coordinates and handles rendering as a shape on the map.
-    Supports drag, rotate, and selection.
+    A worldspace polygon on the minimap, always rendered as a rectangle.
+
+    The polygon is defined by world_x/world_y (center) and default dimensions
+    determined by a french infantry regiment in world units. It scales with the map and supports drag,
+    rotate, and selection.
     """
-    
-    # Size constants
-    SHAPE_SIZE = 15
-    
-    # Colors
-    COLOR_SIDE_1 = QColor("#2c5aa0")  # Blue
-    COLOR_SIDE_2 = QColor("#a02c2c")  # Red
-    COLOR_BORDER_NORMAL = QColor("#aaaaaa")
-    COLOR_BORDER_SELECTED = QColor("#ffff00")
-    COLOR_BORDER_HOVER = QColor("#64b5f6")
-    
+
+    # Default rectangle dimensions in world units
+    DEFAULT_WIDTH = 170*30 # 170 yards * 30 units/yard
+    DEFAULT_HEIGHT = 10*30 # 10 yards * 30 units/yard
+
     def __init__(self, name: str, unit_row_index: int, side: int, level: int, formation: str, world_x: int, world_y: int, map_widget=None, parent=None):
         """
         Initialize a map unit item.
-        
+
         Args:
             name: Unit name
             unit_row_index: Row index in OOBData
             side: 1 or 2
             level: Hierarchy level (1-6)
             formation: Formation type
-            world_x: World coordinate X
-            world_y: World coordinate Y
+            world_x: World coordinate X (center of rectangle)
+            world_y: World coordinate Y (center of rectangle)
             map_widget: Owning map widget for coordinate sync
             parent: Parent QGraphicsItem
         """
         super().__init__(parent)
-        
+
         self.name = name
         self.unit_row_index = unit_row_index
         self.side = side
@@ -190,64 +219,113 @@ class MapUnitItem(QGraphicsItem):
         self.world_y = world_y
         self.map_widget = map_widget
         self.is_hovered = False
-        
+
+        # Generate default rectangle centered on (world_x, world_y)
+        self._pen = QPen(QColor(255, 255, 0), 2)
+        self._brush = QBrush(QColor(255, 255, 0, 40))
+        self._hover_brush = QBrush(QColor(255, 255, 0, 80))
+        self._selected_pen = QPen(QColor(255, 255, 0), 2)
+        self._scene_polygon: Optional[QPolygonF] = None
+        self._label: str = ""
+
         # Store row index for selection tracking
         self.setData(Qt.UserRole, unit_row_index)
-        
+
         # Enable interaction
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
-        
+
         # Default rotation
         self.setRotation(0)
-    
+
+        # Build scene geometry
+        self._rebuild_scene_geometry()
+
+    def set_label(self, label: str):
+        self._label = label
+        self.update()
+
+    def _rebuild_scene_geometry(self):
+        """Recalculate local-space polygon from current world_x/world_y center."""
+        if self.map_widget is None:
+            return
+        self.prepareGeometryChange()
+        hw = self.DEFAULT_WIDTH / 2
+        hh = self.DEFAULT_HEIGHT / 2
+        corners = [
+            (self.world_x - hw, self.world_y - hh),
+            (self.world_x + hw, self.world_y - hh),
+            (self.world_x + hw, self.world_y + hh),
+            (self.world_x - hw, self.world_y + hh),
+        ]
+        item_pos = self.pos()
+        poly = QPolygonF()
+        for wx, wy in corners:
+            sp = self.map_widget.world_to_scene(wx, wy)
+            poly.append(sp - item_pos)
+        self._scene_polygon = poly
+
+    def update_from_world(self):
+        """Rebuild scene geometry from world coords. Call after map resize/scale."""
+        self._rebuild_scene_geometry()
+        self.update()
+
     def boundingRect(self):
         """Return tight bounding rectangle."""
-        size = self.SHAPE_SIZE * 2
-        return QRectF(-size - 5, -size - 5, size * 2 + 10, size * 2 + 10)
-    
+        if self._scene_polygon is not None and not self._scene_polygon.isEmpty():
+            return self._scene_polygon.boundingRect().adjusted(-10, -10, 10, 10)
+        return QRectF()
+
+    def shape(self) -> QPainterPath:
+        """Return the item's shape for hit testing."""
+        path = QPainterPath()
+        if self._scene_polygon is not None and not self._scene_polygon.isEmpty():
+            path.addPolygon(self._scene_polygon)
+            path.closeSubpath()
+        return path
+
     def paint(self, painter: QPainter, option, widget=None):
-        """Paint the unit shape."""
-        # Determine colors
-        side_color = self.COLOR_SIDE_1 if self.side == 1 else self.COLOR_SIDE_2
+        """Paint the polygon."""
+        if self._scene_polygon is None or self._scene_polygon.isEmpty():
+            return
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
         if self.isSelected():
-            side_color = side_color.lighter(150)
+            painter.setPen(self._selected_pen)
+            painter.setBrush(self._brush)
         elif self.is_hovered:
-            side_color = side_color.lighter(120)
-        
-        border_color = self.COLOR_BORDER_SELECTED if self.isSelected() else self.COLOR_BORDER_HOVER if self.is_hovered else self.COLOR_BORDER_NORMAL
-        
-        # Draw a circle/shape based on level
-        painter.setBrush(QBrush(side_color))
-        painter.setPen(QPen(border_color, 2))
-        
-        # Draw circle for simplicity (can be extended to use proper shapes)
-        radius = self.SHAPE_SIZE
-        painter.drawEllipse(QPointF(0, 0), radius, radius)
-        
-        # Draw level indicator (number of stars or dots)
-        num_stars = min(self.level, 3)  # Max 3 stars for readability
-        star_spacing = radius * 0.6
-        for i in range(num_stars):
-            x = (i - (num_stars - 1) / 2) * star_spacing
-            painter.drawEllipse(QPointF(x, -radius - 5), 2, 2)
-    
+            painter.setPen(self._pen)
+            painter.setBrush(self._hover_brush)
+        else:
+            painter.setPen(self._pen)
+            painter.setBrush(self._brush)
+
+        painter.drawPolygon(self._scene_polygon)
+
+        if self._label and self._scene_polygon.size() > 0:
+            center = self._scene_polygon.boundingRect().center()
+            painter.setPen(QPen(QColor(255, 255, 255)))
+            painter.setFont(QFont("Arial", 8))
+            painter.drawText(center, self._label)
+
     def hoverEnterEvent(self, event):
         """Handle hover enter."""
         self.is_hovered = True
         self.update()
-    
+
     def hoverLeaveEvent(self, event):
         """Handle hover leave."""
         self.is_hovered = False
         self.update()
-    
+
     def itemChange(self, change, value):
         """Handle item position changes."""
         if change == QGraphicsItem.ItemPositionHasChanged and self.map_widget is not None:
-            self.world_x, self.world_y = self.map_widget.scene_to_world(self.pos().x(), self.pos().y())
+            self.world_x, self.world_y = self.map_widget.scene_to_world(value.x(), value.y())
+            self._rebuild_scene_geometry()
         return super().itemChange(change, value)
 
 
@@ -257,8 +335,11 @@ class OOBMapWidget(QWidget):
     # Signals
     unit_placed = Signal(int, int, int)  # (row_index, world_x, world_y)
     
-    def __init__(self, parent=None):
+    def __init__(self, oob_data=None, parent=None):
         super().__init__(parent)
+        
+        # OOB data model (for retrieving unit hierarchy)
+        self.oob_data = oob_data
         
         # Map data storage
         self.map_ini_path = None
@@ -272,16 +353,14 @@ class OOBMapWidget(QWidget):
         self.tile_scale = 512
         self.units_per_yard = 30
         
-        # Placement mode data
-        self.placement_mode = False
-        self.pending_placement_row = None
-        self.pending_placement_data = {}
+        # Unit placement data
         self.placed_units: List[MapUnitItem] = []
         self.placed_row_indices: set = set()  # track row indices to prevent duplicates
         self.max_units = 50
-        self.placement_button = None
-        self.unit_label = None
         self.unit_count_label = None
+
+        # Worldspace shape overlay data
+        self.placed_shapes: List[MapUnitItem] = []
         
         self.init_ui()
     
@@ -322,17 +401,6 @@ class OOBMapWidget(QWidget):
         self.units_per_yard_spinbox.valueChanged.connect(self.on_units_per_yard_changed)
         control_layout.addWidget(self.units_per_yard_spinbox)
         
-        # Placement mode button
-        self.placement_button = QPushButton("Placement Mode: OFF")
-        self.placement_button.setCheckable(True)
-        self.placement_button.toggled.connect(self.on_placement_mode_toggled)
-        self.placement_button.setMaximumWidth(150)
-        control_layout.addWidget(self.placement_button)
-        
-        # Unit label
-        self.unit_label = QLabel("Unit: ---")
-        self.unit_label.setMaximumWidth(200)
-        control_layout.addWidget(self.unit_label)
         
         # Unit count label
         self.unit_count_label = QLabel("Units: 0/50")
@@ -363,6 +431,7 @@ class OOBMapWidget(QWidget):
         self.minimap_view.setMouseTracking(True)
         self.minimap_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.minimap_view.setStyleSheet("border: 1px solid #333333; background-color: #1a1a1a;")
+        self.minimap_view.setAcceptDrops(True)  # Enable drag-and-drop
         main_layout.addWidget(self.minimap_view, 1)
         
         # Coordinates display
@@ -518,11 +587,12 @@ class OOBMapWidget(QWidget):
         
         # Restore placed units with updated positions
         self._update_placed_unit_positions()
+        self.update_all_shapes()
         for unit in placed_units_backup:
             self.minimap_scene.addItem(unit)
         
-        # Fit view to scene contents
-        self.minimap_view.fitInView(self.minimap_scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        # Fit view to pixmap only, ignoring placed items that may extend beyond it
+        self.minimap_view.fitInView(self.minimap_pixmap_item.boundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
     
     def on_minimap_mouse_move(self, event):
         """Handle mouse movement over minimap to display coordinates."""
@@ -538,30 +608,31 @@ class OOBMapWidget(QWidget):
             self.coord_label.setText("Coordinates: --")
             return
         
-        # Get the scaled pixmap from the scene
-        items = self.minimap_scene.items()
-        if not items:
+        # Get the scaled pixmap item (use stored reference, not items[0] which is unreliable)
+        pixmap_item = self.minimap_pixmap_item
+        if pixmap_item is None:
             self.coord_label.setText("Coordinates: --")
             return
         
-        # The first item should be the pixmap item
-        pixmap_item = items[0]
         pixmap_width = pixmap_item.boundingRect().width()
         pixmap_height = pixmap_item.boundingRect().height()
         
-        # Calculate relative position within the scaled pixmap
-        pixel_x = scene_pos.x() - scene_rect.x()
-        pixel_y = scene_pos.y() - scene_rect.y()
+        # Check if mouse is within the scaled pixmap bounds
+        pixmap_pos = pixmap_item.pos()
+        adjusted_pixel_x = scene_pos.x() - pixmap_pos.x()
+        adjusted_pixel_y = scene_pos.y() - pixmap_pos.y()
         
-        # Check if within scaled pixmap bounds
-        if pixel_x < 0 or pixel_y < 0 or pixel_x >= pixmap_width or pixel_y >= pixmap_height:
+        if adjusted_pixel_x < 0 or adjusted_pixel_y < 0 or adjusted_pixel_x >= pixmap_width or adjusted_pixel_y >= pixmap_height:
             self.coord_label.setText("Coordinates: --")
             return
         
-        # Calculate world coordinates based on scaled pixmap dimensions
-        # Formula: world_coord = (pixel_coord / scaled_pixmap_dimension) * (tile_scale * tga_dimension)
-        world_x = int((pixel_x / pixmap_width) * (self.tile_scale * self.tga_width))
-        world_y = int((pixel_y / pixmap_height) * (self.tile_scale * self.tga_height))
+        # Clamp to pixmap bounds to avoid division issues at edges
+        adjusted_pixel_x = max(0, min(adjusted_pixel_x, pixmap_width - 1))
+        adjusted_pixel_y = max(0, min(adjusted_pixel_y, pixmap_height - 1))
+        
+        # Formula: world_coord = (adjusted_pixel_coord / scaled_pixmap_dimension) * (tile_scale * tga_dimension)
+        world_x = int((adjusted_pixel_x / pixmap_width) * (self.tile_scale * self.tga_width))
+        world_y = int((adjusted_pixel_y / pixmap_height) * (self.tile_scale * self.tga_height))
         
         self.coord_label.setText(f"Coordinates: ({world_x}, {world_y})")
     
@@ -573,41 +644,41 @@ class OOBMapWidget(QWidget):
         """Handle tile scale spinbox value change."""
         self.tile_scale = value
         self._update_placed_unit_positions()
+        self.update_all_shapes()
         # Coordinates will be recalculated on next mouse move via on_minimap_mouse_move()
     
     def on_units_per_yard_changed(self, value: int):
         """Handle units per yard spinbox value change."""
         self.units_per_yard = value
     
-    # ==================== Placement Mode Methods ====================
+    # ==================== Unit Placement Methods ====================
     
-    def on_placement_mode_toggled(self, enabled: bool):
-        """Handle placement mode toggle."""
-        self.placement_mode = enabled
-        if enabled:
-            self.placement_button.setText("Placement Mode: ON")
-            self.placement_button.setStyleSheet("background-color: #2c5aa0;")
-        else:
-            self.placement_button.setText("Placement Mode: OFF")
-            self.placement_button.setStyleSheet("")
-            self.pending_placement_row = None
-            self.unit_label.setText("Unit: ---")
-    
-    def set_pending_unit(self, row_index: int, unit_name: str, side: int = 1, level: int = 1, formation: str = ""):
-        """Set which unit is pending placement from the tree view."""
-
-        if not self.placement_mode:
-            self.placement_mode = True
-            self.placement_button.setChecked(True)
+    def place_unit_at_position(self, scene_pos: QPointF, unit_data: Dict):
+        """Place a unit at the given scene position from drag-and-drop."""
+        scene_rect = self.minimap_scene.sceneRect()
         
-        self.pending_placement_row = row_index
-        self.pending_placement_data = {
-            "name": unit_name,
-            "side": side,
-            "level": level,
-            "formation": formation,
-        }
-        self.unit_label.setText(f"Unit: {unit_name}")
+        if not scene_rect.contains(scene_pos):
+            return
+        
+        row_index = unit_data.get("row_index")
+        
+        # Check for duplicate placement
+        if row_index in self.placed_row_indices:
+            unit_name = unit_data.get("name", "Unknown")
+            QMessageBox.information(
+                self,
+                "Duplicate Unit",
+                f"{unit_name} has already been placed on the map.\n"
+                f"Each unit can only be placed once."
+            )
+            return
+        
+        if len(self.placed_units) >= self.max_units:
+            QMessageBox.warning(self, "Limit Reached", f"Maximum {self.max_units} units can be placed.")
+            return
+        
+        world_x, world_y = self.scene_to_world(scene_pos.x(), scene_pos.y())
+        self._place_unit(row_index, world_x, world_y, unit_data)
     
     def world_to_scene(self, world_x: int, world_y: int) -> QPointF:
         """Convert world coordinates to scene coordinates."""
@@ -640,51 +711,17 @@ class OOBMapWidget(QWidget):
         world_y = int((scene_offset_y / pixmap_rect.height()) * world_height)
         return world_x, world_y
     
-    def on_map_clicked(self, event):
-        """Handle map click in placement mode."""
-        if self.pending_placement_row is None:
-            return
-                # Only allow levels 1-4 (Side, Army, Corps, Division) to be placed
-        level = self.pending_placement_data.get("level", 1)
-        if level is None or level > 4:
-            QMessageBox.information(
-                None,
-                "Placement Restricted",
-                f"Only levels 1-4 (Side, Army, Corps, Division) can be placed on the map.\n"
-                f"Selected unit is level {level}: {self.pending_placement_data.get("name", f"Unit {len(self.placed_units) + 1}")}"
-            )
-            return
-        # Check for duplicate placement
-        if self.pending_placement_row in self.placed_row_indices:
-            unit_name = self.pending_placement_data.get("name", "Unknown")
-            QMessageBox.information(
-                self,
-                "Duplicate Unit",
-                f"{unit_name} has already been placed on the map.\n"
-                f"Each unit can only be placed once."
-            )
-            return
-        
-        if len(self.placed_units) >= self.max_units:
-            QMessageBox.warning(self, "Limit Reached", f"Maximum {self.max_units} units can be placed.")
-            return
-        
-        scene_pos = self.minimap_view.mapToScene(event.pos())
-        scene_rect = self.minimap_scene.sceneRect()
-        
-        if not scene_rect.contains(scene_pos):
-            return
-        
-        world_x, world_y = self.scene_to_world(scene_pos.x(), scene_pos.y())
-        self._place_unit(self.pending_placement_row, world_x, world_y)
     
-    def _place_unit(self, row_index: int, world_x: int, world_y: int):
+    
+    def _place_unit(self, row_index: int, world_x: int, world_y: int, unit_data: Optional[Dict] = None):
         """Create and place a unit on the map."""
-        # Get unit data from pending placement data
-        name = self.pending_placement_data.get("name", f"Unit {len(self.placed_units) + 1}")
-        side = self.pending_placement_data.get("side", 1)
-        level = self.pending_placement_data.get("level", 1)
-        formation = self.pending_placement_data.get("formation", "")
+        if unit_data is None:
+            unit_data = {}
+        # Get unit data from the provided dictionary
+        name = unit_data.get("name", f"Unit {len(self.placed_units) + 1}")
+        side = unit_data.get("side", 1)
+        level = unit_data.get("level", 1)
+        formation = unit_data.get("formation", "")
         
         # Create map unit item
         unit_item = MapUnitItem(
@@ -701,6 +738,7 @@ class OOBMapWidget(QWidget):
         # Position on scene
         scene_pos = self.world_to_scene(world_x, world_y)
         unit_item.setPos(scene_pos)
+        unit_item._rebuild_scene_geometry()
         
         # Add to scene and tracking list
         self.minimap_scene.addItem(unit_item)
@@ -754,6 +792,176 @@ class OOBMapWidget(QWidget):
         ]
     
     # ==================== End Placement Mode Methods ====================
+
+    # ==================== Worldspace Shape Methods ====================
+
+    # def remove_shape(self, shape_item: MapUnitItem):
+    #     """Remove a shape from the scene."""
+    #     if shape_item in self.placed_shapes:
+    #         self.minimap_scene.removeItem(shape_item)
+    #         self.placed_shapes.remove(shape_item)
+
+    def update_all_shapes(self):
+        """Rebuild scene geometry for all shapes. Call after map resize/scale change."""
+        for shape in self.placed_shapes:
+            shape.update_from_world()
+
+    def clear_all_shapes(self):
+        """Remove all worldspace shapes from the scene."""
+        for shape in self.placed_shapes:
+            self.minimap_scene.removeItem(shape)
+        self.placed_shapes.clear()
+
+    def get_placed_shapes_data(self) -> List[Dict]:
+        """Export shape data for serialization."""
+        return [
+            {
+                "world_x": s.world_x,
+                "world_y": s.world_y,
+                "label": s._label,
+            }
+            for s in self.placed_shapes
+        ]
+
+    # ==================== End Worldspace Shape Methods ====================
+    
+    def show_formation_context_menu(self, unit_item: MapUnitItem, global_pos):
+        """Show right-click context menu for formation options."""
+        if self.oob_data is None:
+            QMessageBox.warning(self, "Error", "OOB data not loaded. Cannot apply formations.")
+            return
+        
+        # Deselect all other units and select only this one
+        self.minimap_scene.clearSelection()
+        unit_item.setSelected(True)
+        
+        # Create context menu
+        menu = QMenu(self)
+        road_action = menu.addAction("Road Formation")
+        line_action = menu.addAction("Line Formation")
+        menu.addSeparator()
+        cancel_action = menu.addAction("Cancel")
+        
+        # Connect actions
+        road_action.triggered.connect(
+            lambda: self.apply_formation(unit_item, "road")
+        )
+        line_action.triggered.connect(
+            lambda: self.apply_formation(unit_item, "line")
+        )
+        
+        # Show menu
+        menu.exec(global_pos)
+    
+    def apply_formation(self, parent_unit_item: MapUnitItem, formation_type: str):
+        """Apply a formation (road or line) to a unit and all its children."""
+        if self.oob_data is None:
+            QMessageBox.warning(self, "Error", "OOB data not loaded.")
+            return
+        
+        try:
+            # Get the parent unit's row data
+            parent_row_index = parent_unit_item.unit_row_index
+            parent_row = self.oob_data.get_row(parent_row_index)
+            parent_key = self.oob_data.get_hierarchy_key(parent_row, parent_row_index)
+            parent_pos = (parent_unit_item.world_x, parent_unit_item.world_y)
+            parent_rotation = parent_unit_item.rotation()
+            
+            # Get all subordinate row indices (children + self)
+            subordinate_indices = self.oob_data.get_subordinate_row_indices(parent_row_index)
+            
+            # Build hierarchy keys and unit data dict for all subordinates
+            all_units_by_key = {}
+            children_keys = []
+            
+            for sub_row_index in subordinate_indices:
+                if sub_row_index == parent_row_index:
+                    continue  # Skip the parent itself
+                
+                sub_row = self.oob_data.get_row(sub_row_index)
+                sub_key = self.oob_data.get_hierarchy_key(sub_row, sub_row_index)
+                children_keys.append(sub_key)
+                all_units_by_key[sub_key] = {
+                    "row_index": sub_row_index,
+                    "row": sub_row,
+                }
+            
+            if not children_keys:
+                QMessageBox.information(self, "No Children", "This unit has no subordinates to arrange.")
+                return
+            
+            # Calculate formation positions
+            if formation_type == "road":
+                positions = calculate_road_formation(
+                    parent_pos,
+                    parent_rotation,
+                    children_keys,
+                    all_units_by_key,
+                    spacing=100.0
+                )
+            elif formation_type == "line":
+                positions = calculate_line_formation(
+                    parent_pos,
+                    parent_rotation,
+                    children_keys,
+                    all_units_by_key,
+                    spacing=100.0
+                )
+            else:
+                QMessageBox.warning(self, "Error", f"Unknown formation type: {formation_type}")
+                return
+            
+            # Apply positions to placed units and place any not yet on the map
+            units_to_select = [parent_unit_item]
+            for unit_key, (world_x, world_y) in list(positions.items())[1:]: # Skip the parent unit which is at index 0
+                row_index = all_units_by_key[unit_key]["row_index"]
+                row = all_units_by_key[unit_key]["row"]
+                
+                # Find the corresponding MapUnitItem
+                unit_item = None
+                for placed_unit in self.placed_units:
+                    if placed_unit.unit_row_index == row_index:
+                        unit_item = placed_unit
+                        break
+                
+                if unit_item is not None:
+                    # Unit is already placed - update its position
+                    unit_item.world_x = world_x
+                    unit_item.world_y = world_y
+                    
+                    # Update scene position
+                    scene_pos = self.world_to_scene(world_x, world_y)
+                    unit_item.setPos(scene_pos)
+                    units_to_select.append(unit_item)
+                else:
+                    # Unit is not yet placed - place it at the formation position
+                    unit_data = {
+                        "row_index": row_index,
+                        "name": row.get("NAME1", f"Unit {row_index}"),
+                        "side": int(row.get("SIDE 1", 1)),
+                        "level": self.oob_data.get_level_from_hierarchy(row),
+                        "formation": row.get("Formation", ""),
+                    }
+                    self._place_unit(row_index, world_x, world_y, unit_data)
+                    
+                    # Find the newly created unit item and add to selection
+                    for placed_unit in self.placed_units:
+                        if placed_unit.unit_row_index == row_index:
+                            units_to_select.append(placed_unit)
+                            break
+            
+            # Select all units in the formation
+            for unit in units_to_select:
+                unit.setSelected(True)
+            
+        except Exception as e:
+            import traceback
+            tb_str = traceback.format_exc()
+            QMessageBox.critical(
+                self,
+                "Formation Error",
+                f"Failed to apply formation:\n{str(e)}\n\n{tb_str}"
+            )
     
     def resizeEvent(self, event):
         """Handle widget resize to rescale minimap when panel expands."""
@@ -761,6 +969,7 @@ class OOBMapWidget(QWidget):
         if self.minimap_pixmap is not None:
             self.display_minimap()
             self._update_placed_unit_positions()
+            self.update_all_shapes()
 
     def on_minimap_resize(self, event):
         """Handle minimap label resize to rescale the displayed pixmap."""

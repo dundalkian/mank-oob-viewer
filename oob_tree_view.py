@@ -6,8 +6,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import Qt, Signal, QMimeData, QByteArray
+from PySide6.QtGui import QBrush, QColor, QDrag
 from oob_model import OOBData
 import pandas as pd
 from typing import List
@@ -83,6 +83,9 @@ class OOBTreeWidget(QTreeWidget):
         # Enable context menu
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
+        
+        # Enable dragging
+        self.setDragEnabled(True)
     
     def populate(self) -> None:
         """Populate tree from OOBData dataframe."""
@@ -323,7 +326,35 @@ class OOBTreeWidget(QTreeWidget):
             self.blockSignals(False)
 
         self.scrollToItem(item, QAbstractItemView.PositionAtCenter)
-
+    
+    def mousePressEvent(self, event):
+        """Handle mouse press to initiate drag-and-drop."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            item = self.itemAt(event.pos())
+            if item:
+                row_index = item.data(0, Qt.UserRole)
+                if row_index is not None:
+                    # Get unit data from the OOB data
+                    row = self.data.df.iloc[row_index]
+                    unit_data = {
+                        "row_index": row_index,
+                        "name": row.get("Unit", f"Unit {row_index}"),
+                        "side": int(row.get("Side", 1)),
+                        "level": int(row.get("Level", 1)),
+                        "formation": row.get("Formation", ""),
+                    }
+                    
+                    # Create mime data for drag
+                    mime_data = QMimeData()
+                    mime_data.setData("application/x-unit-drop", QByteArray(str(unit_data).encode('utf-8')))
+                    
+                    # Create and start drag
+                    drag = QDrag(self)
+                    drag.setMimeData(mime_data)
+                    drag.exec(Qt.DropAction.CopyAction)
+        
+        super().mousePressEvent(event)
+    
     def on_selection_changed(self) -> None:
         """Handle tree selection changes."""
         items = self.selectedItems()

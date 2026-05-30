@@ -167,10 +167,7 @@ class OOBViewer(QMainWindow):
         self.details = OOBDetailsWidget(self.data)
 
         # Map view
-        self.map_viewer = OOBMapWidget()
-        
-        # Wire tree selection to map for unit placement
-        self.tree.unit_selected.connect(self.on_tree_unit_selected)
+        self.map_viewer = OOBMapWidget(oob_data=self.data)
 
         # Tab widget to switch between details and map views
         self.right_tab_widget = QTabWidget()
@@ -286,19 +283,7 @@ class OOBViewer(QMainWindow):
         self.tree.select_unit(row_index)
         self.details.populate(row_index)
         self.visual.highlight_unit(row_index)
-    
-    def on_tree_unit_selected(self, row_index: int):
-        """Handle unit selection specifically from tree for map placement."""
-        # Get unit data
-        row = self.data.get_row(row_index)
-        unit_name = str(row.get("NAME1", "Unknown"))
-        side = int(row.get("SIDE 1", 1))
-        level = self.data.get_level_from_hierarchy(row)
-        formation = str(row.get("Formation", ""))
         
-        # Send to map widget for placement mode
-        self.map_viewer.set_pending_unit(row_index, unit_name, side, level, formation)
-
     def on_unit_deleted(self, num_deleted: int):
         """Handle unit deletion from tree."""
         # Regenerate the visual view after deletion
