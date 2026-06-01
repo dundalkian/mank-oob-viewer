@@ -18,7 +18,7 @@ class Formation:
         self.keep_form = self.definition[7].strip()
         self.can_wheel = self.definition[8].strip()
         self.can_fight = self.definition[9].strip()
-        self.move_rate_mod = self.definition[10]
+        self.move_rate_mod = self.definition[10].strip()
         self.about_face = self.definition[11].strip()
         self.arty_form = self.definition[12].strip()
         self.min_enemy = self.definition[13].strip()
@@ -76,19 +76,19 @@ class Formation:
     def __str__(self):
         return f"Formation: {self.name}, ID: {self.drill_id}"
 
-class FightingFormation(Formation):
-    """Fighting formations are the lowest echelon formations that directly engage in combat. Lvl6 Units: Regiments, Batteries, and Squadrons are all fighting formations.
-        Relies only on the definition line, the layout is mostly irrelevant as we are not interested in sprite positions, just the bounding box."""
-    def __init__(self, drill):
-        super().__init__(drill)
-        # Minimum of 10 yards to prevent single column formations having zero length.
-        self.length_yards = max(10, self.columns * float(self.col_dist))
-        self.depth_yards = max(10, self.rows * float(self.row_dist))
-        formations[self.drill_id] = self
+# class FightingFormation(Formation):
+#     """Fighting formations are the lowest echelon formations that directly engage in combat. Lvl6 Units: Regiments, Batteries, and Squadrons are all fighting formations.
+#         Relies only on the definition line, the layout is mostly irrelevant as we are not interested in sprite positions, just the bounding box."""
+#     def __init__(self, drill):
+#         super().__init__(drill)
+#         # Minimum of 10 yards to prevent single column formations having zero length.
+#         self.length_yards = max(10, self.columns * float(self.col_dist))
+#         self.depth_yards = max(10, self.rows * float(self.row_dist))
+#         formations[self.drill_id] = self
 
-    def __str__(self):
-        return (f"Fighting Formation: {self.name}, ID: {self.drill_id}, "
-                f"Length: {self.length_yards} yards, Depth: {self.depth_yards} yards")
+#     def __str__(self):
+#         return (f"Fighting Formation: {self.name}, ID: {self.drill_id}, "
+#                 f"Length: {self.length_yards} yards, Depth: {self.depth_yards} yards")
 
 class CommandFormation(Formation):
     """Command formations are higher echelon formations that may command other formations. Lvl5 and above Units: Brigades, Divisions, and Corps are all command formations."""
@@ -96,44 +96,310 @@ class CommandFormation(Formation):
         super().__init__(drill)
         layout_2d = [x.split(',') for x in self.layout]
         
-        # Create a 2D array to hold the calculated width and height for each position in the layout
-        size_2d = [[(0.0,0.0)]*len(layout_2d[0]) for _ in range(len(layout_2d))]
-        
-        total_width = 0.0
-        total_height = 0.0
+        # Parse all positions from the layout
+        self.all_positions = {}  # All positions defined in the formation
         for x, line in enumerate(layout_2d):
             for y, position in enumerate(line):
-                calculated_width = 0
-                calculated_height = 0
+                pos_info = self.parse_position_entry(position)
+                if pos_info.get("seq"):
+                    self.all_positions[pos_info['seq']] = (x, y, pos_info)
+        # Calculate positions in yards for all defined positions
+        self._calculate_positions_in_yards(layout_2d)
+        
+        # Add to list of all loaded formations.
+        formations[self.drill_id] = self
+
+    def _calculate_positions_in_yards(self, layout_2d):
+        """Calculate the x,y positions in yards for each sequence, normalized to seq 1 at (0,0).
+        
+        Uses a 2D grid approach where columns are aligned across all rows, accounting for empty positions.
+        """
+        self.positions = {}  # {seq: (x_yards, y_yards)}
+        
+        # Step 1: Build a position map (row, col) -> seq_info
+        position_map = {}  # {(row, col): pos_info}
+        max_cols = 0
+        for row, line in enumerate(layout_2d):
+            max_cols = max(max_cols, len(line))
+            for col, position in enumerate(line):
+                pos_info = self.parse_position_entry(position)
+                if pos_info.get("seq"):
+                    position_map[(row, col)] = pos_info
+        
+        # Step 2: Calculate column widths (based on all entries in each column, not just sequences)
+        col_widths = [0.0] * max_cols
+        for row, line in enumerate(layout_2d):
+            for col, position in enumerate(line):
                 pos_info = self.parse_position_entry(position)
                 if pos_info.get("seq"):
                     calculated_width = self.dependent_distance(pos_info['col_dist'], pos_info['subformation']) + self.dependent_distance(self.col_dist, self.sub_form)
-                    calculated_height = self.dependent_distance(pos_info['row_dist'], pos_info['subformation']) + self.dependent_distance(self.row_dist, self.sub_form)
-
-                size_2d[x][y] = (calculated_width, calculated_height)
-
-        for line in size_2d:
-            row_width = sum([pos[0] for pos in line])
-            row_height = max([pos[1] for pos in line])
-            total_width = max(total_width, row_width)
-            total_height += row_height
+                    col_widths[col] = max(col_widths[col], calculated_width)
         
-        # Add to list of all loaded formations.
-        self.length_yards = max(10, total_width)
-        self.depth_yards = max(10, total_height)
-        formations[self.drill_id] = self
-        print(f"ID: {self.drill_id}: Length = {self.length_yards} yards, Depth = {self.depth_yards} yards\n   Subformation Size: {formations[self.sub_form].length_yards if self.sub_form else 'N/A'} yards by {formations[self.sub_form].depth_yards if self.sub_form else 'N/A'} yards")
+        # Step 3: Calculate row heights
+        row_heights = [0.0] * len(layout_2d)
+        for row, line in enumerate(layout_2d):
+            for col, position in enumerate(line):
+                pos_info = self.parse_position_entry(position)
+                if pos_info.get("seq"):
+                    calculated_height = self.dependent_distance(pos_info['row_dist'], pos_info['subformation']) + self.dependent_distance(self.row_dist, self.sub_form)
+                    row_heights[row] = max(row_heights[row], calculated_height)
+        
+        # Step 4: Calculate cumulative x and y for each column and row
+        col_cumulative_x = [0.0]
+        for width in col_widths:
+            col_cumulative_x.append(col_cumulative_x[-1] + width)
+        
+        row_cumulative_y = [0.0]
+        for height in row_heights:
+            row_cumulative_y.append(row_cumulative_y[-1] + height)
+        
+        # Step 5: Assign positions based on 2D grid
+        for (row, col), pos_info in position_map.items():
+            seq = pos_info['seq']
+            x = col_cumulative_x[col]
+            y = row_cumulative_y[row]
+            self.positions[seq] = (x, y)
+        
+        # Normalize all positions relative to seq 1 at (0, 0)
+        if '1' in self.positions:
+            ref_x, ref_y = self.positions['1']
+            self.positions = {seq: (x - ref_x, y - ref_y) for seq, (x, y) in self.positions.items()}
+        
+        # Calculate overall formation dimensions
+        if self.positions:
+            all_x = [pos[0] for pos in self.positions.values()]
+            all_y = [pos[1] for pos in self.positions.values()]
+            self.length_yards = max(all_x) - min(all_x) if all_x else 10
+            self.depth_yards = max(all_y) - min(all_y) if all_y else 10
+            self.length_yards = max(10, self.length_yards)
+            self.depth_yards = max(10, self.depth_yards)
+        else:
+            self.length_yards = 10
+            self.depth_yards = 10
 
+    def get_positions_for_strength(self, strength) -> dict:
+        """
+        Get the positions for a given strength (number of sub-units).
+        Returns only the positions for seq 1 through strength.
+        
+        Args:
+            strength (int): Number of sub-units to include (1-indexed)
+            
+        Returns:
+            dict: {seq: (x_yards, y_yards)} for seq 1 through strength
+        """
+        layout = {}
+        for seq, pos in self.positions.items():
+            try:
+                if int(seq) <= strength:
+                    layout[seq] = pos
+            except ValueError:
+                # Non-numeric sequence, skip
+                pass
+        return layout
 
-
-
-                
-
-
-
+    def get_dimensions_at_strength(self, strength) -> tuple:
+        """
+        Get the actual dimensions (length, depth) of this formation at a given strength.
+        
+        For fighting formations: strength is an integer, returns bounding box of first N positions.
+        For command formations: strength is an integer (number of sub-units), returns bounding box accordingly.
+        
+        Args:
+            strength (int): The strength/number of positions to include
+            
+        Returns:
+            tuple: (length_yards, depth_yards) - the actual dimensions at this strength
+        """
+        layout = self.get_positions_for_strength(strength)
+        
+        if not layout:
+            return (10, 10)
+        
+        all_x = [pos[0] for pos in layout.values()]
+        all_y = [pos[1] for pos in layout.values()]
+        
+        length = max(all_x) - min(all_x) if all_x else 10
+        depth = max(all_y) - min(all_y) if all_y else 10
+        
+        return (max(10, length), max(10, depth))
 
     def __str__(self):
         return (f"Command Formation: {self.name}, ID: {self.drill_id}")
+
+def get_layout(unit: dict) -> dict:
+    """
+    Given a unit (regiment, brigade, division, etc.) with a formation and strength, 
+    return the layout of positions with their coordinates in yards relative to seq 1 (flag bearer).
+    
+    For fighting formations (Lvl6): strength is an integer (number of units)
+    For command formations (Lvl5-2): strength is a list of sub-unit strengths OR list of sub-units dicts
+    
+    Args:
+        unit (dict): {'formation': formation_id, 'strength': strength_value}
+        
+    Returns:
+        dict: Positioned units with their coordinates in yards
+        - For Lvl6: {seq: (x_yards, y_yards)} 
+        - For Lvl5+: {seq: {'position': (x, y), 'unit': sub_unit_dict}} or similar structure
+    """
+    formation_id = unit['formation']
+    strength = unit['strength']
+    
+    if formation_id not in formations:
+        raise ValueError(f"Formation ID {formation_id} not found.")
+    
+    formation = formations[formation_id]
+    print(formation)
+    
+    # Handle integer strength (fighting formation or simplified layout)
+    if isinstance(strength, int):
+        layout = {}
+        for seq, pos in formation.positions.items():
+            try:
+                if int(seq) <= strength:
+                    layout[seq] = pos
+            except ValueError:
+                # Non-numeric sequence, skip
+                pass
+        return layout
+    
+    # Handle list strength (command formation with multiple sub-units)
+    elif isinstance(strength, list):
+        layout = {}
+        
+        # Check if items are dicts (nested units) or ints (strengths)
+        sub_unit_dicts = []
+        for idx, item in enumerate(strength):
+            seq = str(idx + 1)
+            
+            if isinstance(item, dict):
+                # It's a sub-unit dict like {'formation': 'DRIL_Lvl5_...', 'strength': [...]}
+                sub_unit_dicts.append((seq, item))
+            else:
+                # TODO: remove this case, this should not be used, pass in sub unit dicts for all command formations.
+                print("SHOULD NOT BE USING INTEGER STRENGTHS IN A LIST.")
+                # It's a strength value (int), create a basic sub-unit dict
+                if seq in formation.positions:
+                    sub_unit_dicts.append((seq, {'strength': item}))
+        print(sub_unit_dicts)
+        # Calculate positions with actual sub-unit dimensions
+        layout = _calculate_positioned_subunits(formation, sub_unit_dicts)
+        return layout
+    
+    else:
+        raise ValueError(f"Strength must be int or list, got {type(strength)}")
+
+def _calculate_positioned_subunits(formation: 'CommandFormation', sub_unit_dicts: list) -> dict:
+    """
+    Calculate positions for sub-units accounting for their actual dimensions at their given strengths.
+    
+    Args:
+        formation: The parent formation (Lvl5, Lvl4, etc.)
+        sub_unit_dicts: List of (seq, sub_unit_dict) tuples
+        
+    Returns:
+        dict: {seq: positioned_info} with actual positions based on sub-unit sizes
+    """
+    layout = {}
+    
+    # Get sub-formation for size calculations
+    sub_form_id = formation.sub_form
+    if not sub_form_id or sub_form_id not in formations:
+        # Fallback: use standard positions if no sub-formation defined
+        for seq, sub_unit_dict in sub_unit_dicts:
+            if seq in formation.positions:
+                layout[seq] = formation.positions[seq]
+        return layout
+    
+    sub_formation = formations[sub_form_id]
+    
+    # Calculate actual dimensions for each sub-unit at its strength
+    sub_unit_sizes = {}  # {seq: (length, depth)}
+    for seq, sub_unit_dict in sub_unit_dicts:
+        strength = sub_unit_dict.get('strength', 100)
+        if isinstance(strength, int):
+            # Get actual size of sub-formation at this strength
+            actual_dims = sub_formation.get_dimensions_at_strength(strength)
+            sub_unit_sizes[seq] = actual_dims
+        else:
+            # Complex nested strength, use default sub-formation size
+            sub_unit_sizes[seq] = (sub_formation.length_yards, sub_formation.depth_yards)
+    
+    # Re-calculate positions using actual sub-unit sizes
+    # Build a position map like before
+    position_map = {}
+    max_cols = 0
+    for row, line in enumerate(formation.layout):
+        parts = line.split(',')
+        max_cols = max(max_cols, len(parts))
+        for col, position in enumerate(parts):
+            pos_info = formation.parse_position_entry(position)
+            if pos_info.get("seq"):
+                position_map[(row, col)] = pos_info
+    
+    # Calculate column widths using actual sub-unit sizes + spacing
+    col_widths = [0.0] * max_cols
+    for (row, col), pos_info in position_map.items():
+        seq = pos_info['seq']
+        
+        # Get the base col_dist for this position
+        col_dist_str = pos_info['col_dist'] if pos_info['col_dist'] != "0" else formation.col_dist
+        
+        # Calculate actual width: if col_dist has '+', add actual sub-unit size
+        if col_dist_str.endswith('+'):
+            base_dist = float(col_dist_str[:-1])
+            if seq in sub_unit_sizes:
+                actual_width = base_dist + sub_unit_sizes[seq][0]  # length of sub-unit
+            else:
+                actual_width = base_dist
+        else:
+            actual_width = float(col_dist_str)
+        
+        col_widths[col] = max(col_widths[col], actual_width)
+    
+    # Calculate row heights using actual sub-unit sizes + spacing
+    row_heights = [0.0] * len(formation.layout)
+    for (row, col), pos_info in position_map.items():
+        seq = pos_info['seq']
+        
+        # Get the base row_dist for this position
+        row_dist_str = pos_info['row_dist'] if pos_info['row_dist'] != "0" else formation.row_dist
+        
+        # Calculate actual height: if row_dist has '+', add actual sub-unit size
+        if row_dist_str.endswith('+'):
+            base_dist = float(row_dist_str[:-1])
+            if seq in sub_unit_sizes:
+                actual_height = base_dist + sub_unit_sizes[seq][1]  # depth of sub-unit
+            else:
+                actual_height = base_dist
+        else:
+            actual_height = float(row_dist_str)
+        
+        row_heights[row] = max(row_heights[row], actual_height)
+    
+    # Calculate cumulative positions
+    col_cumulative_x = [0.0]
+    for width in col_widths:
+        col_cumulative_x.append(col_cumulative_x[-1] + width)
+    
+    row_cumulative_y = [0.0]
+    for height in row_heights:
+        row_cumulative_y.append(row_cumulative_y[-1] + height)
+    
+    # Assign positions
+    for (row, col), pos_info in position_map.items():
+        seq = pos_info['seq']
+        x = col_cumulative_x[col]
+        y = row_cumulative_y[row]
+        layout[seq] = (x, y)
+    
+    # Normalize relative to seq 1
+    if '1' in layout:
+        ref_x, ref_y = layout['1']
+        layout = {seq: (x - ref_x, y - ref_y) for seq, (x, y) in layout.items()}
+    
+    return layout
 
 def populate_formations_from_csv(file_path):
     """Parse formation definitions from a CSV file, reading blocks of lines.
@@ -211,7 +477,8 @@ def populate_formations_from_csv(file_path):
     # makes sure all lower level formations are parsed before higher level ones that may depend on them.
     for block in lvl6_blocks:
         try:
-            formation = FightingFormation(block)
+            #formation = CommandFormation(block)
+            formation = CommandFormation(block)
         except Exception as e:
             print(f"Skipping block due to parsing error: {e}")
             print(f"Block lines: {block}")

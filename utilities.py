@@ -85,4 +85,47 @@ if __name__ == '__main__':
     #for drill_id, d in list(dims.items()):
     #    print(f"{drill_id}: Length={d['length_yards']:.1f} yd, Depth={d['depth_yards']:.1f} yd")
     import formation
-    formation.populate_formations_from_csv('C:\\Steam\\steamapps\\common\\Scourge Of War - Remastered\\Base\\Logistics\\drills.csv')
+    #formation.populate_formations_from_csv('C:\\Steam\\steamapps\\common\\Scourge Of War - Remastered\\Base\\Logistics\\drills.csv')
+    formation.populate_formations_from_csv('test.csv')
+    
+    # Test Lvl6 - Fighting Formation (regiment) with integer strength
+    regiment = {'formation':'DRIL_Lvl6_Inf_Line_3L', 'strength': 100}
+    layout_regiment = formation.get_layout(regiment)
+    print("Lvl6 Regiment Layout (strength=100):")
+    print(f"  Positions: {len(layout_regiment)} units\n")
+    
+    # Test with different regiment strengths to show sizing
+    #print("Lvl6 Regiment dimensions at different strengths:")
+    reg_form = formation.formations['DRIL_Lvl6_Inf_Line_3L']
+    for str_val in [50, 100, 150, 200]:
+        dims = reg_form.get_dimensions_at_strength(str_val)
+        #print(f"  Strength {str_val}: {dims[0]:.1f} x {dims[1]:.1f} yards")
+
+    
+    # Test Lvl5 - Command Formation (brigade) with list strength
+    # This shows how actual sub-unit dimensions affect brigade spacing
+    regiment1 = {'formation':'DRIL_Lvl6_Inf_Line_3L', 'strength': 50}
+    regiment2 = {'formation':'DRIL_Lvl6_Inf_Line_3L', 'strength': 100}
+    regiment3 = {'formation':'DRIL_Lvl6_Inf_Line_3L', 'strength': 150}
+    regiment4 = {'formation':'DRIL_Lvl6_Inf_Line_3L', 'strength': 100}
+    regiment5 = {'formation':'DRIL_Lvl6_Inf_Line_3L', 'strength': 35}
+    regiment6 = {'formation':'DRIL_Lvl6_Inf_Line_3L', 'strength': 200}
+
+    brigade_full = {'formation':'DRIL_Lvl5_Inf_Brig_DoubleLine_Fr', 'strength': [regiment1, regiment2, regiment3, regiment4]}
+    layout_brigade_full = formation.get_layout(brigade_full)
+    #print("Lvl5 Brigade Layout (strength=[100, 150, 200, 250] - 4 regiments at different strengths):")
+    #print(f"  Positions: {layout_brigade_full}")
+    #print(f"  Brigade spacing accounts for each regiment's actual size\n")
+\
+    # Test with same strength for all regiments - positions should be further apart
+    brigade_uniform = {'formation':'DRIL_Lvl5_Inf_Brig_DoubleLine_Fr', 'strength': [regiment3, regiment4, regiment5, regiment6]}
+    layout_brigade_uniform = formation.get_layout(brigade_uniform)
+    #print("Lvl5 Brigade Layout (strength=[100, 100, 100, 100] - all regiments at half strength):")
+    #print(f"  Positions: {layout_brigade_uniform}")
+    #print(f"  Compare to above - different spacing due to different sub-unit sizes\n")
+    
+    # Test Lvl5 with reduced strength (only 2 regiments)
+    brigade_small = {'formation':'DRIL_Lvl5_Inf_Brig_DoubleLine_Fr', 'strength': [regiment5, regiment6]}
+    layout_brigade_small = formation.get_layout(brigade_small)
+    #print("Lvl5 Brigade Layout (strength=[100, 150] - 2 regiments):")
+    #print(f"  Positions: {layout_brigade_small}")
