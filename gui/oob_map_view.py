@@ -3,6 +3,7 @@ import json
 import configparser
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
+import math
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSpinBox,
@@ -28,7 +29,26 @@ class OOBMapGraphicsView(QGraphicsView):
         self.selection_start = None
         self.is_box_selecting = False
 
+        # Right-click rotation state
+        self.is_rotating = False
+        self.rotation_reference_items = []  # store (item, start_angle) pairs
+        self._last_mouse_angle = None
+
     def mouseMoveEvent(self, event):
+        if self.is_rotating and self.rotation_reference_items:
+            scene_pos = self.mapToScene(event.pos())
+            if self._last_mouse_angle is not None:
+                for item in self.rotation_reference_items:
+                    center = item.mapToScene(item.boundingRect().center())
+                    # Calculate angle delta between consecutive mouse positions
+                    prev_angle = self._angle_between(self._last_mouse_angle, center)
+                    current_angle = self._angle_between(scene_pos, center)
+                    delta = current_angle - prev_angle
+                    item.setRotation(item.rotation() + delta)
+            self._last_mouse_angle = scene_pos
+            event.accept()
+            return
+
         if self.is_box_selecting and self.selection_start:
             scene_pos = self.mapToScene(event.pos())
             selection_rect = QRectF(self.selection_start, scene_pos).normalized()
@@ -49,6 +69,20 @@ class OOBMapGraphicsView(QGraphicsView):
         if event.button() == Qt.MouseButton.MiddleButton:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             super().mousePressEvent(event)
+        elif event.button() == Qt.MouseButton.RightButton:
+            # Start rotation mode
+            items = self.scene().selectedItems()
+            valid_items = [i for i in items if isinstance(i, MapUnitItem)]
+            if valid_items:
+                self.is_rotating = True
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                scene_pos = self.mapToScene(event.pos())
+                self._last_mouse_angle = scene_pos
+                self.rotation_reference_items = valid_items
+                event.accept()
+                return
+            else:
+                super().mousePressEvent(event)
         elif event.button() == Qt.MouseButton.LeftButton:
             item = self.itemAt(event.pos())
             if isinstance(item, MapUnitItem):
@@ -74,6 +108,12 @@ class OOBMapGraphicsView(QGraphicsView):
         if event.button() == Qt.MouseButton.MiddleButton:
             self.setDragMode(QGraphicsView.NoDrag)
             super().mouseReleaseEvent(event)
+        elif event.button() == Qt.MouseButton.RightButton and self.is_rotating:
+            self.is_rotating = False
+            self.rotation_reference_items.clear()
+            self.unsetCursor()
+            event.accept()
+            return
         elif event.button() == Qt.MouseButton.LeftButton and self.is_box_selecting:
             if self.selection_rect_item:
                 rect = self.selection_rect_item.rect()
@@ -91,6 +131,12 @@ class OOBMapGraphicsView(QGraphicsView):
             if item is None:
                 self.scene().clearSelection()
             super().mouseReleaseEvent(event)
+
+    def _angle_between(self, point1: QPointF, point2: QPointF) -> float:
+        """Calculate angle in degrees from point1 to point2."""
+        dx = point2.x() - point1.x()
+        dy = point2.y() - point1.y()
+        return math.degrees(math.atan2(dx, -dy))  # -dy so 0° = North
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat("application/x-unit-drop"):
@@ -124,19 +170,9 @@ class OOBMapGraphicsView(QGraphicsView):
             super().contextMenuEvent(event)
 
     def wheelEvent(self, event):
-        items = self.scene().selectedItems()
-        if items:
-            angle_delta = event.angleDelta().y() / 8
-            for item in items:
-                if isinstance(item, MapUnitItem):
-                    item.setRotation(item.rotation() + angle_delta)
-            event.accept()
-            return
-        else:
-            zoom_factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-            self.scale(zoom_factor, zoom_factor)
-            event.accept()
-            return
+        zoom_factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+        self.scale(zoom_factor, zoom_factor)
+        event.accept()
 
 
 class MapUnitItem(QGraphicsItem):
