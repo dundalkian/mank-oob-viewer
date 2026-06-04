@@ -263,7 +263,7 @@ class OOBTreeWidget(QTreeWidget):
                         "name": str(row.get("NAME1", f"Unit {row_index}")),
                         "side": int(row.get("SIDE 1", 1) or 1),
                         "level": int(self.data.get_level_from_hierarchy(row) or 1),
-                        "formation": "",
+                        "formation": str(row.get("Formation", "")),
                         "head_count": int(row.get("Head Count", 0) or 0),
                     }
 

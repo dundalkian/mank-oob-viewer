@@ -1,6 +1,7 @@
 from typing import List, Self
 from collections import defaultdict
 import traceback
+import re
 
 
 class FormationArchetype:
@@ -132,7 +133,9 @@ class ActualFormation:
                         self.subunit_dimensions[seq] = 2.5, 1.8
                     self.subunit_dimensions[seq] = subunit.get_dimensions()
                 else:
-                    self.subunit_dimensions[seq] = float(self.archetype.col_dist.rstrip('+')), float(self.archetype.row_dist.rstrip('+'))
+                    # 0,0 is hack because spacing is already taken into account, this should only effect level 6 units. 
+                    # Certain formations are still off, like columns in particular for some reason. But much closer than before
+                    self.subunit_dimensions[seq] = 0,0 # float(self.archetype.col_dist.rstrip('+')), float(self.archetype.row_dist.rstrip('+'))
             except Exception:
                 raise Exception(f"Error calculating dimensions for seq {seq}: {traceback.format_exc()}")
 
@@ -212,6 +215,7 @@ class ActualFormation:
 
 def populate_formation_archetypes_from_csv(file_path):
     """Parse formation definitions from a CSV file, reading blocks of lines."""
+    FormationArchetype.formations.clear()
     with open(file_path, 'r', encoding='cp1252') as f:
         lines = f.readlines()
 
@@ -237,7 +241,9 @@ def populate_formation_archetypes_from_csv(file_path):
             i += 1
             continue
 
-        block_lines = []
+        block_lines = [data_lines[i].strip()]
+        i += 1
+        valid_cell = re.compile(r"^(\d+|\(.+\)\d+)$")
         while i < len(data_lines):
             block_line = data_lines[i].strip()
             if not block_line:
@@ -245,8 +251,12 @@ def populate_formation_archetypes_from_csv(file_path):
             block_parts = block_line.split(',')
             col1 = block_parts[0].strip() if block_parts else ""
             col2 = block_parts[1].strip() if len(block_parts) > 1 else ""
-            if col1.lower() == 'x' or col2.lower() == 'x' or not any(block_parts):
+            if col1.lower() == 'x' or col2.lower() == 'x' or col2.startswith("DRIL_"):
                 break
+            if not all(valid_cell.match(cell.strip()) or not cell.strip()
+                       for cell in block_parts):
+                i += 1
+                continue
             block_lines.append(block_line)
             i += 1
 

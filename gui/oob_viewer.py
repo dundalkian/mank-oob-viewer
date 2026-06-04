@@ -5,6 +5,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSizePolicy, QFileDialog, QLabel, QPushButton, QSplitter, QMessageBox, QTabWidget,
+    QFrame,
 )
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtCore import Qt
@@ -71,6 +72,10 @@ def apply_dark_theme(app: QApplication) -> None:
             background-color: #1f1f1f;
             color: #ffffff;
             border: 1px solid #333333;
+        }
+
+        QFrame[frameShape="4"], QFrame[frameShape="5"] {
+            color: #333333;
         }
 
         QTableWidget QTableCornerButton::section {
@@ -192,6 +197,24 @@ class OOBViewer(QMainWindow):
 
         self.map_viewer.unit_selected.connect(self.on_unit_selected)
 
+        vseparator = QFrame()
+        vseparator.setFrameShape(QFrame.Shape.VLine)
+        vseparator.setFrameShadow(QFrame.Shadow.Sunken)
+        controls_layout.addWidget(vseparator)
+
+        self.load_formations_button = QPushButton("Load Formations")
+        self.load_formations_button.clicked.connect(
+            lambda: self.map_viewer.load_formations_dialog())
+        controls_layout.addWidget(self.load_formations_button)
+
+        self.drills_label = QLabel("No drills file loaded")
+        controls_layout.addWidget(self.drills_label)
+
+        self.map_viewer.drills_loaded.connect(
+            lambda path: self.drills_label.setText(f"Drills: {path}"))
+        if self.map_viewer.drills_path:
+            self.drills_label.setText(f"Drills: {self.map_viewer.drills_path}")
+
         self.right_tab_widget = QTabWidget()
         self.right_tab_widget.addTab(self.details, "Details")
         self.right_tab_widget.addTab(self.map_viewer, "Map")
@@ -232,7 +255,6 @@ class OOBViewer(QMainWindow):
             self.save_csv(path)
 
     def save_scenario_dialog(self):
-        MAP_NAME = "Waterloo"
         base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Output")
         os.makedirs(base_dir, exist_ok=True)
 
@@ -241,8 +263,16 @@ class OOBViewer(QMainWindow):
 
         placed_units = self.map_viewer.get_placed_units_data()
 
+        if self.map_viewer.map_ini_path is not None:
+            map_name = self.map_viewer.map_ini_path.stem
+        else:
+            map_name = ""
+
+        oob_status_path = self.status_label.text()
+        oob_filename = os.path.basename(oob_status_path) if oob_status_path else ""
+
         try:
-            self.data.save_scenario(scenario_dir, MAP_NAME, self.status_label.text(), placed_units)
+            self.data.save_scenario(scenario_dir, map_name, oob_filename, placed_units)
             QMessageBox.information(
                 self, "Save Successful",
                 f"Scenario file saved to:\n{scenario_dir}")

@@ -7,7 +7,7 @@ import math
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSpinBox,
-    QFileDialog, QMessageBox, QSizePolicy, QGraphicsView, QGraphicsScene,
+    QSlider, QFileDialog, QMessageBox, QSizePolicy, QGraphicsView, QGraphicsScene,
     QGraphicsItem, QMenu,
 )
 from PySide6.QtGui import QPixmap, QFont, QPainter, QImage, QPen, QBrush, QColor, QPainterPath, QPolygonF, QWheelEvent
@@ -243,6 +243,8 @@ class MapUnitItem(QGraphicsItem):
         self.origin_offset_x = self.DEFAULT_RECT_WIDTH / 2
         self.origin_offset_y = self.DEFAULT_RECT_HEIGHT / 2
 
+        self.refresh_dimensions()
+        
         self.setData(Qt.UserRole, unit_row_index)
 
         self.setData(Qt.UserRole, unit_row_index)
@@ -380,6 +382,7 @@ class OOBMapWidget(QWidget):
 
     unit_placed = Signal(int, int, int)
     unit_selected = Signal(int)
+    drills_loaded = Signal(str)
 
     def __init__(self, oob_data=None, parent=None, map_ini: str = "", drills: str = ""):
         super().__init__(parent)
@@ -392,6 +395,8 @@ class OOBMapWidget(QWidget):
         self.tga_width = None
         self.tga_height = None
         self.minimap_pixmap = None
+        self.grayscale_pixmap = None
+        self.showing_grayscale = False
         self.minimap_pixmap_item = None
         self.minimap_display_size = None
         self.tile_scale = 512
@@ -418,10 +423,6 @@ class OOBMapWidget(QWidget):
         self.load_button = QPushButton("Load Map")
         self.load_button.clicked.connect(self.load_map)
         control_layout.addWidget(self.load_button)
-
-        self.load_formations_button = QPushButton("Load Formations")
-        self.load_formations_button.clicked.connect(self.load_formations_dialog)
-        control_layout.addWidget(self.load_formations_button)
 
         tile_scale_label = QLabel("Tile Scale:")
         control_layout.addWidget(tile_scale_label)
@@ -454,6 +455,23 @@ class OOBMapWidget(QWidget):
         clear_button.setMaximumWidth(100)
         control_layout.addWidget(clear_button)
 
+        self.swap_button = QPushButton("Swap to Grayscale")
+        self.swap_button.clicked.connect(self.on_swap_graphics)
+        self.swap_button.setEnabled(False)
+        self.swap_button.setMaximumWidth(140)
+        control_layout.addWidget(self.swap_button)
+
+        opacity_label = QLabel("Opacity:")
+        control_layout.addWidget(opacity_label)
+
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(100)
+        self.opacity_slider.setMaximumWidth(120)
+        self.opacity_slider.setToolTip("Loaded minimap opacity")
+        self.opacity_slider.valueChanged.connect(self.on_minimap_opacity_changed)
+        control_layout.addWidget(self.opacity_slider)
+
         control_layout.addStretch()
 
         control_widget = QWidget()
@@ -462,9 +480,6 @@ class OOBMapWidget(QWidget):
 
         self.info_label = QLabel("No map loaded")
         main_layout.addWidget(self.info_label, 0)
-
-        self.drills_label = QLabel("No drills file loaded")
-        main_layout.addWidget(self.drills_label, 0)
 
         self.minimap_scene = QGraphicsScene()
         self.minimap_view = OOBMapGraphicsView(self.minimap_scene, self)
@@ -478,32 +493,28 @@ class OOBMapWidget(QWidget):
 
         coord_layout = QHBoxLayout()
         coord_layout.setContentsMargins(0, 0, 0, 0)
+        coord_layout.setSpacing(8)
+
         self.coord_label = QLabel("Coordinates: --")
         font = QFont()
         font.setPointSize(10)
         font.setBold(True)
         self.coord_label.setFont(font)
+        self.coord_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         coord_layout.addWidget(self.coord_label)
-        coord_layout.addStretch()
 
-        coord_widget = QWidget()
-        coord_widget.setLayout(coord_layout)
-        main_layout.addWidget(coord_widget, 0)
-
-        name_layout = QHBoxLayout()
-        name_layout.setContentsMargins(0, 0, 0, 0)
         self.name_label = QLabel("Selected: --")
         name_label_font = QFont()
         name_label_font.setPointSize(10)
         name_label_font.setBold(True)
         self.name_label.setFont(name_label_font)
-        self.name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        name_layout.addStretch()
-        name_layout.addWidget(self.name_label)
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        coord_layout.addWidget(self.name_label, 1)
 
-        name_widget = QWidget()
-        name_widget.setLayout(name_layout)
-        main_layout.addWidget(name_widget, 0)
+        coord_widget = QWidget()
+        coord_widget.setLayout(coord_layout)
+        main_layout.addWidget(coord_widget, 0)
 
         self.minimap_scene.selectionChanged.connect(self._on_scene_selection_changed)
 
@@ -532,7 +543,8 @@ class OOBMapWidget(QWidget):
         try:
             from core.formation import populate_formation_archetypes_from_csv
             populate_formation_archetypes_from_csv(csv_path)
-            self.drills_label.setText(f"Drills: {csv_path}")
+            self.drills_path = csv_path
+            self.drills_loaded.emit(csv_path)
         except Exception as e:
             QMessageBox.critical(self, "Formations Load Error",
                                  f"Failed to load formations:\n{str(e)}")
@@ -576,6 +588,22 @@ class OOBMapWidget(QWidget):
         if self.minimap_pixmap.isNull():
             raise ValueError(f"Failed to load minimap image: {minimap_path}")
 
+        grayscale_file = files_section.get("Grayscale", "")
+        if grayscale_file:
+            grayscale_path = base_dir / grayscale_file
+            if grayscale_path.exists():
+                self.grayscale_pixmap = QPixmap(str(grayscale_path))
+                if self.grayscale_pixmap.isNull():
+                    self.grayscale_pixmap = None
+            else:
+                self.grayscale_pixmap = None
+        else:
+            self.grayscale_pixmap = None
+
+        self.showing_grayscale = False
+        self.swap_button.setEnabled(self.grayscale_pixmap is not None)
+        self.swap_button.setText("Swap to Grayscale")
+
         self.display_minimap()
 
         self.map_ini_path = ini_path
@@ -592,7 +620,8 @@ class OOBMapWidget(QWidget):
         if self.minimap_pixmap is None:
             return
 
-        self.minimap_display_size = (self.minimap_pixmap.width(), self.minimap_pixmap.height())
+        pixmap = self.grayscale_pixmap if self.showing_grayscale else self.minimap_pixmap
+        self.minimap_display_size = (pixmap.width(), pixmap.height())
 
         placed_units_backup = list(self.placed_units)
         placed_indices_backup = set(self.placed_row_indices)
@@ -606,12 +635,13 @@ class OOBMapWidget(QWidget):
             view_size.setWidth(400)
             view_size.setHeight(400)
 
-        scaled_pixmap = self.minimap_pixmap.scaled(
+        scaled_pixmap = pixmap.scaled(
             view_size, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation)
 
         self.minimap_pixmap_item = self.minimap_scene.addPixmap(scaled_pixmap)
         self.minimap_pixmap_item.setPos(0, 0)
+        self.minimap_pixmap_item.setOpacity(self.opacity_slider.value() / 100.0)
 
         self._update_placed_unit_positions()
         self.update_all_shapes()
@@ -666,6 +696,18 @@ class OOBMapWidget(QWidget):
 
     def on_units_per_yard_changed(self, value: int):
         self.units_per_yard = value
+
+    def on_minimap_opacity_changed(self, value: int):
+        if self.minimap_pixmap_item is not None:
+            self.minimap_pixmap_item.setOpacity(value / 100.0)
+
+    def on_swap_graphics(self):
+        if self.grayscale_pixmap is None:
+            return
+        self.showing_grayscale = not self.showing_grayscale
+        self.swap_button.setText(
+            "Swap to Minimap" if self.showing_grayscale else "Swap to Grayscale")
+        self.display_minimap()
 
     # ==================== Unit Placement Methods ====================
 
@@ -873,13 +915,21 @@ class OOBMapWidget(QWidget):
         available.sort(key=lambda a: a.name)
 
         current_arch = next((a for a in available if a.drill_id == unit_item.formation), None)
-        others = [a for a in available if a.drill_id != unit_item.formation]
+        oob_default = self.oob_data.get_row(unit_item.unit_row_index).get("Formation", "")
+        default_arch = next((a for a in available if a.drill_id == oob_default), None)
+        others = [a for a in available
+                  if a.drill_id != unit_item.formation and a.drill_id != oob_default]
 
         menu = QMenu(self)
         if current_arch is not None:
-            default_action = menu.addAction(f"{current_arch.drill_id} (default)")
-            default_action.triggered.connect(
+            current_action = menu.addAction(f"{current_arch.drill_id} (current)")
+            current_action.triggered.connect(
                 lambda _checked=False, did=current_arch.drill_id: self.apply_formation(unit_item, did))
+        if default_arch is not None:
+            default_action = menu.addAction(f"{default_arch.drill_id} (default)")
+            default_action.triggered.connect(
+                lambda _checked=False, did=default_arch.drill_id: self.apply_formation(unit_item, did))
+        if current_arch is not None or default_arch is not None:
             menu.addSeparator()
         for arch in others:
             action = menu.addAction(arch.drill_id)

@@ -189,6 +189,8 @@ class OOBData:
                     scenario_df.at[i, "east"] = pu["world_x"]
                     scenario_df.at[i, "dirSouth"] = south
                     scenario_df.at[i, "dirEast"] = east
+                    if pu.get("formation"):
+                        scenario_df.at[i, "formation"] = pu["formation"]
 
         os.makedirs(scenario_dir, exist_ok=True)
         path = os.path.join(scenario_dir, "scenario.csv")
@@ -204,6 +206,22 @@ class OOBData:
             f.writelines(lines)
 
         _copy_templates(scenario_dir)
+
+        if map_name:
+            ini_path = os.path.join(scenario_dir, "scenario.ini")
+            if os.path.exists(ini_path):
+                with open(ini_path, "r", encoding="cp1252") as f:
+                    lines = f.readlines()
+                in_init = False
+                for i, line in enumerate(lines):
+                    stripped = line.strip().lower()
+                    if stripped.startswith("[") and stripped.endswith("]"):
+                        in_init = (stripped == "[init]")
+                    elif in_init and stripped.startswith("map="):
+                        lines[i] = f"map={map_name}\n"
+                        break
+                with open(ini_path, "w", encoding="cp1252") as f:
+                    f.writelines(lines)
 
     # ── Row access ─────────────────────────────────────────────────
 
