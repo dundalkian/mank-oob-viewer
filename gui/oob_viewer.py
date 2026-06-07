@@ -197,14 +197,15 @@ class OOBViewer(QMainWindow):
         self.shared_toolbar.regen_indices_requested.connect(self.action_regenerate_indices)
         self.shared_toolbar.regenerate_layout_requested.connect(
             lambda: self.visual._on_regenerate_view())
-        self.shared_toolbar.reset_view_requested.connect(
-            lambda: self.visual._on_reset_view())
+        self.shared_toolbar.toggle_layout_view_requested.connect(
+            lambda checked: self._toggle_layout_view(checked))
         self.shared_toolbar.placement_filter_changed.connect(
             lambda filter_state: self.tree.set_placement_filter(filter_state))
         self.shared_toolbar.setDisabled(True)
 
         self.visual = OOBVisualWidget(self.data)
         self.visual.unit_selected.connect(self.on_unit_selected)
+        self.visual.setVisible(False)
 
         self.details = OOBDetailsWidget(self.data)
 
@@ -247,6 +248,8 @@ class OOBViewer(QMainWindow):
         self.right_tab_widget.addTab(self.details, "Details")
         self.right_tab_widget.addTab(self.map_viewer, "Map")
         self.right_tab_widget.addTab(self.scenario, "Scenario")
+        if self.config.get("map-ini"):
+            self.right_tab_widget.setCurrentWidget(self.map_viewer)
 
         self.left_splitter.addWidget(self.tree)
         self.left_splitter.addWidget(self.shared_toolbar)
@@ -418,6 +421,11 @@ class OOBViewer(QMainWindow):
 
     def on_zoom_to_unit(self, row_index: int):
         self.map_viewer.on_unit_double_clicked(row_index)
+
+    def _toggle_layout_view(self, visible: bool):
+        self.visual.setVisible(visible)
+        self.shared_toolbar.toggle_layout_view_button.setText(
+            "Hide Layout" if visible else "Show Layout")
 
     def _on_placement_changed(self):
         self.tree.set_placed_row_indices(self.map_viewer.placed_row_indices)

@@ -1293,6 +1293,18 @@ class OOBMapWidget(QWidget):
         self.minimap_scene.clearSelection()
         unit_item.setSelected(True)
 
+        menu = QMenu(self)
+
+        clear_action = menu.addAction("Clear")
+        clear_action.triggered.connect(
+            lambda _checked=False: self._context_clear_selected())
+
+        select_subs_action = menu.addAction("Select Subordinates")
+        select_subs_action.triggered.connect(
+            lambda _checked=False: self._context_select_subordinates(unit_item))
+
+        menu.addSeparator()
+
         target_level = max(unit_item.level, 3)
         available = [a for a in FormationArchetype.formations.values()
                      if f"DRIL_Lvl{target_level}" in a.drill_id]
@@ -1316,7 +1328,6 @@ class OOBMapWidget(QWidget):
         for arch in available:
             categories[category_for(arch)].append(arch)
 
-        menu = QMenu(self)
         if current_arch is not None:
             current_action = menu.addAction(f"{current_arch.drill_id} (current)")
             current_action.triggered.connect(
@@ -1344,6 +1355,34 @@ class OOBMapWidget(QWidget):
         menu.addAction("Cancel")
 
         menu.exec(global_pos)
+
+    def _context_clear_selected(self):
+        selected_items = [i for i in self.minimap_scene.selectedItems()
+                         if isinstance(i, MapUnitItem)]
+        if not selected_items:
+            return
+        if len(selected_items) > 1:
+            reply = QMessageBox.question(
+                self, "Clear Units",
+                f"Remove {len(selected_items)} selected units from the map?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+        row_indices = [i.unit_row_index for i in selected_items]
+        self.remove_units_by_row_indices(row_indices)
+
+    def _context_select_subordinates(self, unit_item: MapUnitItem):
+        if self.oob_data is None:
+            return
+        sub_row_indices = self.oob_data.get_subordinate_row_indices(
+            unit_item.unit_row_index)
+        sub_row_set = set(sub_row_indices)
+        self.minimap_scene.clearSelection()
+        for item in self.minimap_scene.items():
+            if isinstance(item, MapUnitItem) and item.unit_row_index in sub_row_set:
+                item.setSelected(True)
 
     def apply_formation(self, parent_unit_item: MapUnitItem, formation_type: str):
         if self.oob_data is None:

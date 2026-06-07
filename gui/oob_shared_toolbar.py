@@ -14,7 +14,7 @@ class OOBSharedToolbar(QWidget):
     placement_filter_changed = Signal(str)
     regen_indices_requested = Signal()
     regenerate_layout_requested = Signal()
-    reset_view_requested = Signal()
+    toggle_layout_view_requested = Signal(bool)
 
     _FILTER_MODES = ["all", "placed", "unplaced"]
     _FILTER_LABELS = {
@@ -58,9 +58,12 @@ class OOBSharedToolbar(QWidget):
         )
         layout.addWidget(self.regenerate_layout_button)
 
-        self.reset_view_button = QPushButton("Reset View")
-        self.reset_view_button.clicked.connect(self.reset_view_requested.emit)
-        layout.addWidget(self.reset_view_button)
+        self.toggle_layout_view_button = QPushButton("Show Layout")
+        self.toggle_layout_view_button.setCheckable(True)
+        self.toggle_layout_view_button.clicked.connect(
+            lambda checked: self.toggle_layout_view_requested.emit(checked)
+        )
+        layout.addWidget(self.toggle_layout_view_button)
 
         # Internal filter state
         self._current_mode = "all"
