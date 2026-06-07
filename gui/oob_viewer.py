@@ -313,6 +313,7 @@ class OOBViewer(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Save OOB CSV", "", "CSV Files (*.csv)")
         if path:
             self.save_csv(path)
+            self._save_config(oob=path)
 
     def save_scenario_dialog(self):
         base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Output")
@@ -420,7 +421,7 @@ class OOBViewer(QMainWindow):
             return
         try:
             self.data.regenerate_hierarchy_indices()
-            self.tree.populate()
+            self.tree.populate_with_expansion()
             self.visual.populate()
             QMessageBox.information(self, "Regenerate Complete",
                                     "Hierarchy indices have been regenerated.")

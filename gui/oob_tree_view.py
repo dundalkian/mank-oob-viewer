@@ -86,9 +86,37 @@ class OOBTreeWidget(QTreeWidget):
         self.setDragEnabled(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._selection_from_tree = False
+        self._expanded_keys: set = set()
+        self.itemExpanded.connect(self._on_item_expanded)
+        self.itemCollapsed.connect(self._on_item_collapsed)
+
+    def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
+        row_index = item.data(0, Qt.UserRole)
+        if row_index is not None:
+            try:
+                hk = self.data.get_hierarchy_key_by_index(row_index)
+                self._expanded_keys.add(hk)
+            except (IndexError, TypeError):
+                pass
+
+    def _on_item_collapsed(self, item: QTreeWidgetItem) -> None:
+        row_index = item.data(0, Qt.UserRole)
+        if row_index is not None:
+            try:
+                hk = self.data.get_hierarchy_key_by_index(row_index)
+                self._expanded_keys.discard(hk)
+            except (IndexError, TypeError):
+                pass
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Delete:
+            self.action_delete()
+        else:
+            super().keyPressEvent(event)
 
     def populate(self) -> None:
         self.clear()
+        self._expanded_keys.clear()
         if self.data.df is None:
             return
 
@@ -102,7 +130,7 @@ class OOBTreeWidget(QTreeWidget):
         experiences = [float(v) if v is not None and not pd.isna(v) else 0.0
                        for v in df["Experience"].tolist()] if "Experience" in df.columns else [0.0] * n_rows
         formations = [str(v) if v is not None and not pd.isna(v) else ""
-                      for v in df["Formation"].tolist()] if "Formation" in df.columns else [""] * n_rows
+                       for v in df["Formation"].tolist()] if "Formation" in df.columns else [""] * n_rows
         line_nums = [int(v) if v is not None and not pd.isna(v) else i + 2
                      for i, v in enumerate(df["line_number"].tolist())] if "line_number" in df.columns else list(range(2, n_rows + 2))
         is_supply = ["SupplyWagon" in f for f in formations]
@@ -184,9 +212,56 @@ class OOBTreeWidget(QTreeWidget):
         finally:
             self.blockSignals(False)
 
-        self.expandToDepth(2)
         for col in range(self.columnCount()):
             self.resizeColumnToContents(col)
+
+        self._expand_initial_levels()
+
+    def _expand_initial_levels(self) -> None:
+        """Expand Side and Army level units in the tree.
+
+        If a group has no side commander, level 1 is Army — in that case only
+        level 1 is expanded (level 2 would be Corps, which should stay collapsed).
+        """
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            self.expandItem(top)
+            if top.data(0, Qt.UserRole) is not None:
+                try:
+                    level = self.data.get_level(top.data(0, Qt.UserRole))
+                    if level == 1:
+                        for j in range(top.childCount()):
+                            self.expandItem(top.child(j))
+                except (IndexError, TypeError):
+                    pass
+
+    def get_expanded_keys(self):
+        """Return a set of hierarchy keys for all currently expanded items."""
+        return set(self._expanded_keys)
+
+    def restore_expanded_keys(self, keys):
+        """Expand items whose hierarchy key is in *keys*."""
+        for i in range(self.topLevelItemCount()):
+            item = self.topLevelItem(i)
+            self._restore_expanded(item, keys)
+
+    def _restore_expanded(self, item, keys):
+        row_index = item.data(0, Qt.UserRole)
+        if row_index is not None:
+            try:
+                hk = self.data.get_hierarchy_key_by_index(row_index)
+                if hk in keys:
+                    self.expandItem(item)
+            except (IndexError, TypeError):
+                pass
+        for i in range(item.childCount()):
+            self._restore_expanded(item.child(i), keys)
+
+    def populate_with_expansion(self):
+        """Populate the tree while preserving the current expansion state."""
+        expanded = self.get_expanded_keys()
+        self.populate()
+        self.restore_expanded_keys(expanded)
 
     def drawRow(self, painter, option, index):
         item = self.itemFromIndex(index)
@@ -423,7 +498,7 @@ class OOBTreeWidget(QTreeWidget):
         deleted_indices = sorted(to_delete)
         self.data.delete_rows(to_delete)
 
-        self.populate()
+        self.populate_with_expansion()
         self.unit_deleted.emit(len(deleted_indices), deleted_indices)
 
     def action_collapse_all(self) -> None:
@@ -477,7 +552,7 @@ class OOBTreeWidget(QTreeWidget):
         if row_index is None:
             return
         if self.data.move_unit(row_index, -1):
-            self.populate()
+            self.populate_with_expansion()
             self.select_unit(row_index)
 
     def action_move_down(self) -> None:
@@ -488,7 +563,7 @@ class OOBTreeWidget(QTreeWidget):
         if row_index is None:
             return
         if self.data.move_unit(row_index, +1):
-            self.populate()
+            self.populate_with_expansion()
             self.select_unit(row_index)
 
     def action_add_single_unit(self, template_path: str) -> None:
@@ -532,7 +607,7 @@ class OOBTreeWidget(QTreeWidget):
         }
         try:
             inserted = self.data.insert_formation(row_index, composition)
-            self.populate()
+            self.populate_with_expansion()
             if inserted:
                 self.select_unit(inserted[0])
         except Exception as e:
