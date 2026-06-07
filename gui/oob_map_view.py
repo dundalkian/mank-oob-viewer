@@ -1290,8 +1290,9 @@ class OOBMapWidget(QWidget):
             QMessageBox.warning(self, "Error", "OOB data not loaded. Cannot apply formations.")
             return
 
-        self.minimap_scene.clearSelection()
-        unit_item.setSelected(True)
+        if not unit_item.isSelected():
+            self.minimap_scene.clearSelection()
+            unit_item.setSelected(True)
 
         menu = QMenu(self)
 
