@@ -2,6 +2,7 @@ import PySide6.QtGui
 import os
 import json
 import configparser
+import traceback
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 import math
@@ -571,6 +572,7 @@ class OOBMapWidget(QWidget):
     objective_placed = Signal(int)
     objective_removed = Signal(int)
     objective_moved = Signal(int, int, int)
+    map_loaded = Signal(str)
 
     def __init__(self, oob_data=None, parent=None, map_ini: str = "", drills: str = ""):
         super().__init__(parent)
@@ -736,7 +738,10 @@ class OOBMapWidget(QWidget):
         try:
             self.load_map_from_ini(ini_path)
         except Exception as e:
-            QMessageBox.critical(self, "Map Load Error", f"Failed to load map:\n{str(e)}")
+            QMessageBox.critical(self, "Map Load Error",
+                                 f"Failed to load map configuration:\n{ini_path}\n\n"
+                                 f"Error: {type(e).__name__}: {str(e)}\n\n"
+                                 f"Stack trace:\n{traceback.format_exc()}")
 
     def load_formations_dialog(self, csv_path=None):
         # current_dir = os.path.curdir
@@ -754,7 +759,9 @@ class OOBMapWidget(QWidget):
             self.drills_loaded.emit(csv_path)
         except Exception as e:
             QMessageBox.critical(self, "Formations Load Error",
-                                 f"Failed to load formations:\n{str(e)}")
+                                 f"Failed to load formations from:\n{csv_path}\n\n"
+                                 f"Error: {type(e).__name__}: {str(e)}\n\n"
+                                 f"Stack trace:\n{traceback.format_exc()}")
 
     def load_map_from_ini(self, ini_path: str):
         ini_path = Path(ini_path)
@@ -826,6 +833,8 @@ class OOBMapWidget(QWidget):
             f"Loaded: {map_name} | LSL: {files_section['LSLFile']} | "
             f"Minimap: {files_section['Minimap']} | "
             f"TGA Dimensions: {self.tga_width}x{self.tga_height}")
+
+        self.map_loaded.emit(str(ini_path))
 
     def display_minimap(self):
         if self.minimap_pixmap is None:
@@ -1248,11 +1257,11 @@ class OOBMapWidget(QWidget):
                 unit.setSelected(True)
 
         except Exception as e:
-            import traceback
-            tb_str = traceback.format_exc()
             QMessageBox.critical(
                 self, "Formation Error",
-                f"Failed to apply formation:\n{str(e)}\n\n{tb_str}")
+                f"Failed to apply formation '{formation_type}':\n\n"
+                f"Error: {type(e).__name__}: {str(e)}\n\n"
+                f"Stack trace:\n{traceback.format_exc()}")
 
     def _on_zoom_to_selected(self):
         items = self.minimap_scene.selectedItems()

@@ -139,11 +139,17 @@ class OOBTreeWidget(QTreeWidget):
                 compute_aggregates(top)
 
         # Build the items. Block all signals during the bulk insert.
+        # Sort by hierarchy key so children appear in correct order after swaps.
+        valid_indices = [idx for idx in range(n_rows)
+                         if self.data.get_level(idx) is not None]
+        sorted_indices = sorted(valid_indices,
+                                key=lambda i: tuple(self.data._hierarchy_keys[i].tolist()))
+
         items_by_key: Dict[Tuple, QTreeWidgetItem] = {}
         top_level_items: List[QTreeWidgetItem] = []
         self.blockSignals(True)
         try:
-            for idx in range(n_rows):
+            for idx in sorted_indices:
                 try:
                     level = self.data.get_level(idx)
                     if level is None:
@@ -483,7 +489,9 @@ class OOBTreeWidget(QTreeWidget):
             clipboard.setText(csv_line)
             QMessageBox.information(self, "Copy CSV", "Unit data copied to clipboard in CSV format")
         except Exception as e:
-            QMessageBox.critical(self, "Copy CSV Error", f"Failed to copy: {str(e)}")
+            QMessageBox.critical(self, "Copy CSV Error", f"Failed to copy to clipboard:\n\n"
+                                 f"Error: {type(e).__name__}: {str(e)}\n\n"
+                                 f"Stack trace:\n{traceback.format_exc()}")
 
     def action_move_up(self) -> None:
         items = self.selectedItems()
@@ -521,7 +529,10 @@ class OOBTreeWidget(QTreeWidget):
             self.populate()
             self.select_unit(new_idx)
         except Exception as e:
-            QMessageBox.critical(self, "Add Unit Error", f"Failed to add unit:\n{str(e)}")
+            QMessageBox.critical(self, "Add Unit Error",
+                                 f"Failed to add unit from template:\n{template_path}\n\n"
+                                 f"Error: {type(e).__name__}: {str(e)}\n\n"
+                                 f"Stack trace:\n{traceback.format_exc()}")
 
     def action_add_formation(self, formation_type: str) -> None:
         items = self.selectedItems()
@@ -549,4 +560,7 @@ class OOBTreeWidget(QTreeWidget):
             if inserted:
                 self.select_unit(inserted[0])
         except Exception as e:
-            QMessageBox.critical(self, "Add Formation Error", f"Failed to add formation:\n{str(e)}")
+            QMessageBox.critical(self, "Add Formation Error",
+                                 f"Failed to add {formation_type} formation:\n\n"
+                                 f"Error: {type(e).__name__}: {str(e)}\n\n"
+                                 f"Stack trace:\n{traceback.format_exc()}")

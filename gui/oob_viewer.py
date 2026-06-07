@@ -1,6 +1,7 @@
 import sys
 import os
 import configparser
+import traceback
 from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -203,12 +204,15 @@ class OOBViewer(QMainWindow):
         self.details = OOBDetailsWidget(self.data)
 
         self.config = self._load_config()
+
         self.map_viewer = OOBMapWidget(
             oob_data=self.data,
             map_ini=self.config.get("map-ini"),
             drills=self.config.get("drills"))
 
         self.map_viewer.unit_selected.connect(self.on_unit_selected)
+        self.map_viewer.map_loaded.connect(
+            lambda path: self._save_config(**{"map-ini": path}))
 
         self.scenario = ScenarioTab(self.map_viewer)
 
@@ -227,6 +231,8 @@ class OOBViewer(QMainWindow):
 
         self.map_viewer.drills_loaded.connect(
             lambda path: self.drills_label.setText(f"Drills: {path}"))
+        self.map_viewer.drills_loaded.connect(
+            lambda path: self._save_config(drills=path))
         if self.map_viewer.drills_path:
             self.drills_label.setText(f"Drills: {self.map_viewer.drills_path}")
 
@@ -246,24 +252,62 @@ class OOBViewer(QMainWindow):
         self.main_splitter.setStretchFactor(1, 1)
 
         self.layout.addWidget(self.main_splitter, 1)
-        self.load_csv(csv_path)
+
+        # Resolve OOB path: command line > config > None
+        cli_path = csv_path if csv_path else None
+        config_path = self.config.get("oob") or None
+        self._oob_path = cli_path if cli_path else config_path
+        if self._oob_path:
+            self.load_csv(self._oob_path)
 
     def _load_config(self) -> dict:
-        config_path = os.path.join(
+        config_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config", "app_config.ini")
+            "config")
+        config_path = os.path.join(config_dir, "app_config.ini")
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir)
+        if not os.path.exists(config_path):
+            parser = configparser.ConfigParser()
+            parser.add_section("paths")
+            parser.set("paths", "map-ini", "")
+            parser.set("paths", "drills", "")
+            parser.set("paths", "oob", "")
+            with open(config_path, "w") as f:
+                parser.write(f)
         parser = configparser.ConfigParser()
-        if os.path.exists(config_path):
-            parser.read(config_path)
+        parser.read(config_path)
         return {
             "map-ini": parser.get("paths", "map-ini", fallback=""),
             "drills": parser.get("paths", "drills", fallback=""),
+            "oob": parser.get("paths", "oob", fallback=""),
         }
+
+    def _save_config(self, **kwargs):
+        config_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config")
+        config_path = os.path.join(config_dir, "app_config.ini")
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir)
+        parser = configparser.ConfigParser()
+        parser.read(config_path)
+        if "paths" not in parser:
+            parser.add_section("paths")
+        if "map-ini" in kwargs:
+            parser.set("paths", "map-ini", kwargs["map-ini"])
+        if "drills" in kwargs:
+            parser.set("paths", "drills", kwargs["drills"])
+        if "oob" in kwargs:
+            parser.set("paths", "oob", kwargs["oob"])
+        with open(config_path, "w") as f:
+            parser.write(f)
 
     def load_csv_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open OOB CSV", "", "CSV Files (*.csv)")
         if path:
             self.load_csv(path)
+            self._save_config(oob=path)
 
     def save_csv_dialog(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save OOB CSV", "", "CSV Files (*.csv)")
@@ -295,7 +339,9 @@ class OOBViewer(QMainWindow):
         except Exception as e:
             QMessageBox.critical(
                 self, "Save Error",
-                f"Failed to save scenario:\n{str(e)}")
+                f"Failed to save scenario to:\n{scenario_dir}\n\n"
+                f"Error: {type(e).__name__}: {str(e)}\n\n"
+                f"Stack trace:\n{traceback.format_exc()}")
 
     def load_csv(self, path):
         try:
@@ -318,7 +364,10 @@ class OOBViewer(QMainWindow):
             self.regen_button.setEnabled(True)
 
         except Exception as e:
-            QMessageBox.critical(self, "Load Error", str(e))
+            QMessageBox.critical(self, "Load Error",
+                                 f"Failed to load OOB file:\n{path}\n\n"
+                                 f"Error: {type(e).__name__}: {str(e)}\n\n"
+                                 f"Stack trace:\n{traceback.format_exc()}")
 
     def save_csv(self, path):
         try:
@@ -329,7 +378,9 @@ class OOBViewer(QMainWindow):
         except Exception as e:
             QMessageBox.critical(
                 self, "Save Error",
-                f"Failed to save CSV:\n{str(e)}")
+                f"Failed to save CSV to:\n{path}\n\n"
+                f"Error: {type(e).__name__}: {str(e)}\n\n"
+                f"Stack trace:\n{traceback.format_exc()}")
 
     def on_unit_selected(self, row_index: int):
         if self._propagating_selection:
@@ -372,7 +423,9 @@ class OOBViewer(QMainWindow):
                                     "Hierarchy indices have been regenerated.")
         except Exception as e:
             QMessageBox.critical(self, "Regenerate Error",
-                                 f"Failed to regenerate indices:\n{str(e)}")
+                                 f"Failed to regenerate hierarchy indices:\n\n"
+                                 f"Error: {type(e).__name__}: {str(e)}\n\n"
+                                 f"Stack trace:\n{traceback.format_exc()}")
 
 
 def main():

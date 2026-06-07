@@ -500,8 +500,10 @@ class OOBData:
     def move_unit(self, row_index: int, direction: int) -> bool:
         """Move a unit up (-1) or down (+1) among its siblings.
 
-        Swaps the hierarchy index at the unit's level with the adjacent
-        sibling at that level.  Subtrees move with their parent.
+        Swaps the hierarchy column value at the unit's level with the adjacent
+        sibling at that level.  All descendants of both the source and target
+        rows have their column at that level swapped so parent references stay
+        consistent.  Deeper hierarchy levels are preserved unchanged.
         Returns True if the move was performed, False if already at the boundary.
         """
         self._ensure_built()
@@ -510,9 +512,9 @@ class OOBData:
             return False
 
         parent_key = self.get_parent_key(self.get_hierarchy_key_by_index(row_index))
-        siblings = self._parent_to_children.get(
-            next((i for i, k in enumerate(self._hierarchy_keys)
-                  if tuple(k) == parent_key), -1), [])
+        parent_row = next((i for i, k in enumerate(self._hierarchy_keys)
+                           if tuple(k) == parent_key), -1)
+        siblings = self._parent_to_children.get(parent_row, [])
         if not siblings:
             return False
 
@@ -529,15 +531,36 @@ class OOBData:
         if target_pos < 0 or target_pos >= len(siblings):
             return False
 
-        swap_idx = siblings[target_pos]
-        level_col_idx = level - 1  # 0-indexed into HIERARCHY_COLS
-        col = HIERARCHY_COLS[level_col_idx]
+        source = row_index
+        target = siblings[target_pos]
 
-        # Swap the hierarchy indices
-        old_val = self.df.at[row_index, col]
-        swap_val = self.df.at[swap_idx, col]
-        self.df.at[row_index, col] = swap_val
-        self.df.at[swap_idx, col] = old_val
+        # Collect all rows in both subtrees (before any mutation).
+        def collect_subtree(idx: int) -> set:
+            rows: List[int] = []
+            stack: List[int] = [idx]
+            while stack:
+                cur = stack.pop()
+                if cur in rows:
+                    continue
+                rows.append(cur)
+                for child in self._parent_to_children.get(cur, []):
+                    if child not in rows:
+                        stack.append(child)
+            return set(rows)
+
+        source_rows = collect_subtree(source)
+        target_rows = collect_subtree(target)
+
+        # Swap the hierarchy column value at the move level for every row in
+        # both subtrees.  Deeper levels are left untouched.
+        level_col_idx = level - 1
+        col = HIERARCHY_COLS[level_col_idx]
+        source_val = self.df.at[source, col]
+        target_val = self.df.at[target, col]
+        for r in source_rows:
+            self.df.at[r, col] = target_val
+        for r in target_rows:
+            self.df.at[r, col] = source_val
 
         self._invalidate_caches()
         self._build_adjacency_index()
