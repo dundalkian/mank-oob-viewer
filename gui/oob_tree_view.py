@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QMimeData, QByteArray
-from PySide6.QtGui import QBrush, QColor, QDrag
+from PySide6.QtGui import QBrush, QColor, QDrag, QFont, QDragEnterEvent, QDragMoveEvent, QDropEvent
 from core.oob_model import OOBData
 from constants import TREE_SIDE_1_BG, TREE_SIDE_2_BG, TREE_INDICATOR_PLACED, TREE_INDICATOR_UNPLACED
 import pandas as pd
@@ -33,6 +33,7 @@ class OOBTreeWidget(QTreeWidget):
     zoom_to_unit_requested = Signal(int)
     formation_requested = Signal(int, dict)
     filter_count_changed = Signal(int, int)  # visible_count, total_count
+    unit_moved = Signal(list)  # list of source row indices that were moved
 
     def __init__(self, data: OOBData, parent=None):
         super().__init__(parent)
@@ -44,6 +45,11 @@ class OOBTreeWidget(QTreeWidget):
         self._placed_row_indices: set = set()
         self._placement_filter: str = "all"
         self._total_unit_count: int = 0
+        self._cut_row_indices: set = set()
+        self._cut_top_level_rows: set = set()
+        self._drop_target_item = None
+        self._drop_target_valid = False
+        self._drop_target_original_bg = None
 
         self.setColumnCount(5)
         self.setHeaderLabels(["Unit", "Level", "Strength", "Experience", "Line"])
@@ -88,6 +94,7 @@ class OOBTreeWidget(QTreeWidget):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.setDragEnabled(True)
+        self.setAcceptDrops(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._selection_from_tree = False
         self._expanded_keys: set = set()
@@ -123,6 +130,13 @@ class OOBTreeWidget(QTreeWidget):
             self.action_delete()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.action_zoom_to_unit()
+        elif event.key() == Qt.Key.Key_X and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.action_cut()
+        elif event.key() == Qt.Key.Key_V and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if self._cut_top_level_rows:
+                self.action_paste()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.action_cancel_cut()
         else:
             super().keyPressEvent(event)
 
@@ -231,6 +245,8 @@ class OOBTreeWidget(QTreeWidget):
         self._expand_initial_levels()
         self._total_unit_count = len(self.data.df)
         self.refresh_indicators_and_visibility()
+        if self._cut_row_indices:
+            self._apply_cut_visual()
 
     def _expand_initial_levels(self) -> None:
         """Expand Side and Army level units in the tree.
@@ -433,18 +449,30 @@ class OOBTreeWidget(QTreeWidget):
                 and event.buttons() & Qt.MouseButton.LeftButton):
             dist = (event.position().toPoint() - self._drag_start_pos).manhattanLength()
             if dist >= QApplication.startDragDistance():
-                row_index = self._drag_item.data(0, Qt.UserRole)
-                if row_index is not None:
+                top_level_items = self._get_top_level_selected_items()
+                if not top_level_items:
+                    top_level_items = [self._drag_item]
+                items_payload = []
+                for it in top_level_items:
+                    row_index = it.data(0, Qt.UserRole)
+                    if row_index is None:
+                        continue
                     info = self.data.unit_info(row_index)
-                    unit_payload = info.to_drag_payload()
+                    items_payload.append(info.to_drag_payload())
 
-                    mime_data = QMimeData()
-                    mime_data.setData("application/x-unit-drop",
-                                      QByteArray(json.dumps(unit_payload).encode('utf-8')))
+                if not items_payload:
+                    self._drag_start_pos = None
+                    self._drag_item = None
+                    super().mouseMoveEvent(event)
+                    return
 
-                    drag = QDrag(self)
-                    drag.setMimeData(mime_data)
-                    drag.exec(Qt.DropAction.CopyAction)
+                mime_data = QMimeData()
+                mime_data.setData("application/x-unit-drop",
+                                  QByteArray(json.dumps({"items": items_payload}).encode('utf-8')))
+
+                drag = QDrag(self)
+                drag.setMimeData(mime_data)
+                drag.exec(Qt.DropAction.MoveAction)
 
                 self._drag_start_pos = None
                 self._drag_item = None
@@ -455,6 +483,141 @@ class OOBTreeWidget(QTreeWidget):
         self._drag_start_pos = None
         self._drag_item = None
         super().mouseReleaseEvent(event)
+
+    def _get_top_level_selected_items(self) -> List[QTreeWidgetItem]:
+        """Get selected items that are not descendants of other selected items."""
+        selected = set(self.selectedItems())
+        top_level: List[QTreeWidgetItem] = []
+        for item in selected:
+            is_descendant_of_selected = False
+            parent = item.parent()
+            while parent is not None:
+                if parent in selected:
+                    is_descendant_of_selected = True
+                    break
+                parent = parent.parent()
+            if not is_descendant_of_selected:
+                top_level.append(item)
+        return top_level
+
+    def _is_valid_drop_target(self, source_row_indices: List[int],
+                              target_row_index: int) -> bool:
+        """Check if target is a valid drop point for any of the source items."""
+        if target_row_index is None:
+            return False
+        target_level = self.data.get_level(target_row_index)
+        if target_level is None:
+            return False
+        for src in source_row_indices:
+            src_level = self.data.get_level(src)
+            if src_level is None:
+                return False
+            if src == target_row_index:
+                return False
+            if self.data.is_descendant_of(target_row_index, src):
+                return False
+            if target_level != src_level and target_level != src_level - 1:
+                return False
+        return True
+
+    def _clear_drop_target_highlight(self):
+        if self._drop_target_item is not None and self._drop_target_original_bg is not None:
+            self._drop_target_item.setBackground(0, self._drop_target_original_bg)
+        self._drop_target_item = None
+        self._drop_target_valid = False
+        self._drop_target_original_bg = None
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasFormat("application/x-unit-drop"):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QDragMoveEvent):
+        if not event.mimeData().hasFormat("application/x-unit-drop"):
+            return
+        raw = event.mimeData().data("application/x-unit-drop")
+        try:
+            payload = json.loads(bytes(raw).decode('utf-8'))
+            items = payload.get("items", [])
+            source_row_indices = [it["row_index"] for it in items if "row_index" in it]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            event.ignore()
+            return
+
+        target_item = self.itemAt(event.position().toPoint())
+        target_row_index = target_item.data(0, Qt.UserRole) if target_item else None
+        valid = self._is_valid_drop_target(source_row_indices, target_row_index)
+
+        if target_item is not self._drop_target_item:
+            self._clear_drop_target_highlight()
+            self._drop_target_item = target_item
+            if valid and target_item is not None:
+                self._drop_target_original_bg = target_item.background(0)
+                target_item.setBackground(0, QBrush(QColor("#3a5f3a")))
+                self._drop_target_valid = True
+            else:
+                self._drop_target_valid = False
+        else:
+            if valid and not self._drop_target_valid and target_item is not None:
+                self._drop_target_original_bg = target_item.background(0)
+                target_item.setBackground(0, QBrush(QColor("#3a5f3a")))
+                self._drop_target_valid = True
+            elif not valid and self._drop_target_valid:
+                if self._drop_target_original_bg is not None:
+                    target_item.setBackground(0, self._drop_target_original_bg)
+                self._drop_target_valid = False
+
+        if valid:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._clear_drop_target_highlight()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        self._clear_drop_target_highlight()
+        if not event.mimeData().hasFormat("application/x-unit-drop"):
+            event.ignore()
+            return
+        raw = event.mimeData().data("application/x-unit-drop")
+        try:
+            payload = json.loads(bytes(raw).decode('utf-8'))
+            items = payload.get("items", [])
+            source_row_indices = [it["row_index"] for it in items if "row_index" in it]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            event.ignore()
+            return
+
+        target_item = self.itemAt(event.position().toPoint())
+        if target_item is None:
+            event.ignore()
+            return
+        target_row_index = target_item.data(0, Qt.UserRole)
+        if target_row_index is None:
+            event.ignore()
+            return
+
+        if not self._is_valid_drop_target(source_row_indices, target_row_index):
+            event.ignore()
+            return
+
+        target_level = self.data.get_level(target_row_index)
+        moved_any = False
+        for src in source_row_indices:
+            src_level = self.data.get_level(src)
+            if src_level is None:
+                continue
+            peer_drop = (target_level == src_level)
+            if self.data.reparent_unit(src, target_row_index, peer_drop):
+                moved_any = True
+
+        if moved_any:
+            self.populate_with_expansion()
+            self.unit_moved.emit(source_row_indices)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def on_selection_changed(self) -> None:
         items = self.selectedItems()
@@ -472,6 +635,11 @@ class OOBTreeWidget(QTreeWidget):
             return
 
         menu = QMenu()
+        menu.addAction("Cut", self.action_cut)
+        menu.addAction("Paste", self.action_paste)
+        if self._cut_row_indices:
+            menu.addAction("Cancel Cut", self.action_cancel_cut)
+        menu.addSeparator()
         menu.addAction("Delete", self.action_delete)
         menu.addSeparator()
         menu.addAction("Zoom to Unit", self.action_zoom_to_unit)
@@ -586,6 +754,91 @@ class OOBTreeWidget(QTreeWidget):
 
         self.populate_with_expansion()
         self.unit_deleted.emit(len(deleted_indices), deleted_indices)
+
+    def action_cut(self) -> None:
+        top_level_items = self._get_top_level_selected_items()
+        if not top_level_items:
+            QMessageBox.warning(self, "Cut", "No unit selected")
+            return
+        new_cut_rows: set = set()
+        self._cut_top_level_rows: set = set()
+        for item in top_level_items:
+            row_index = item.data(0, Qt.UserRole)
+            if row_index is None:
+                continue
+            self._cut_top_level_rows.add(row_index)
+            try:
+                new_cut_rows.update(self.data.get_subordinate_row_indices(row_index))
+            except ValueError:
+                new_cut_rows.add(row_index)
+        self._cut_row_indices = new_cut_rows
+        self._apply_cut_visual()
+
+    def action_paste(self) -> None:
+        if not self._cut_top_level_rows:
+            return
+        selected = self.selectedItems()
+        target_item = None
+        for item in selected:
+            if item.data(0, Qt.UserRole) not in self._cut_row_indices:
+                target_item = item
+                break
+        if target_item is None:
+            target_item = self.currentItem()
+        if target_item is None:
+            QMessageBox.warning(self, "Paste", "No target unit selected")
+            return
+        target_row_index = target_item.data(0, Qt.UserRole)
+        if target_row_index is None:
+            QMessageBox.warning(self, "Paste", "Invalid target")
+            return
+
+        sources = list(self._cut_top_level_rows)
+        valid_sources = [s for s in sources if self.data.get_level(s) is not None]
+        if not self._is_valid_drop_target(valid_sources, target_row_index):
+            QMessageBox.warning(
+                self, "Paste",
+                "Cannot paste here: target level is not compatible with the cut units.")
+            return
+
+        target_level = self.data.get_level(target_row_index)
+        moved_any = False
+        for src in valid_sources:
+            src_level = self.data.get_level(src)
+            if src_level is None:
+                continue
+            peer_drop = (target_level == src_level)
+            if self.data.reparent_unit(src, target_row_index, peer_drop):
+                moved_any = True
+        if moved_any:
+            self.populate_with_expansion()
+            self.unit_moved.emit(valid_sources)
+            self.action_cancel_cut()
+
+    def action_cancel_cut(self) -> None:
+        if not self._cut_row_indices:
+            return
+        self._cut_row_indices = set()
+        self._cut_top_level_rows = set()
+        self._clear_cut_visual()
+
+    def _apply_cut_visual(self) -> None:
+        strike_font = QFont()
+        strike_font.setStrikeOut(True)
+        for item in self._collect_all_items():
+            row_index = item.data(0, Qt.UserRole)
+            if row_index in self._cut_row_indices:
+                for col in range(self.columnCount()):
+                    f = item.font(col)
+                    f.setStrikeOut(True)
+                    item.setFont(col, f)
+
+    def _clear_cut_visual(self) -> None:
+        for item in self._collect_all_items():
+            for col in range(self.columnCount()):
+                f = item.font(col)
+                f.setStrikeOut(False)
+                item.setFont(col, f)
 
     def action_collapse_all(self) -> None:
         self.collapseAll()

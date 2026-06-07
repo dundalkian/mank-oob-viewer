@@ -267,7 +267,13 @@ class OOBMapGraphicsView(QGraphicsView, ZoomableGraphicsView):
         if event.mimeData().hasFormat("application/x-unit-drop"):
             mime_data = event.mimeData()
             data = mime_data.data("application/x-unit-drop").data()
-            unit_info = UnitInfo.from_drag_payload(json.loads(data.decode('utf-8')))
+            payload = json.loads(data.decode('utf-8'))
+            if isinstance(payload, dict) and "items" in payload:
+                items = payload["items"]
+                if not items:
+                    return
+                payload = items[0]
+            unit_info = UnitInfo.from_drag_payload(payload)
             scene_pos = self.mapToScene(event.pos())
             self.map_widget.place_unit_at_position(scene_pos, unit_info)
             event.acceptProposedAction()

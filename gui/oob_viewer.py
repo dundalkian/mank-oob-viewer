@@ -191,6 +191,7 @@ class OOBViewer(QMainWindow):
         self.tree = OOBTreeWidget(self.data)
         self.tree.unit_selected.connect(self.on_unit_selected)
         self.tree.unit_deleted.connect(self.on_unit_deleted)
+        self.tree.unit_moved.connect(self.on_unit_moved)
         self.tree.zoom_to_unit_requested.connect(self.on_zoom_to_unit)
 
         self.shared_toolbar = OOBSharedToolbar()
@@ -418,6 +419,9 @@ class OOBViewer(QMainWindow):
         self.map_viewer.remove_units_by_row_indices(deleted_row_indices)
         self.map_viewer.shift_placed_unit_indices(deleted_row_indices)
         self._on_placement_changed()
+
+    def on_unit_moved(self, source_row_indices: list):
+        self.visual.populate()
 
     def on_zoom_to_unit(self, row_index: int):
         self.map_viewer.on_unit_double_clicked(row_index)

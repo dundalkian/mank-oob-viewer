@@ -608,6 +608,96 @@ class OOBData:
         self._build_adjacency_index()
         return True
 
+    def reparent_unit(self, row_index: int, target_row_index: int,
+                      peer_drop: bool) -> bool:
+        """Reparent a unit (and its subtree) under a new parent.
+
+        Args:
+            row_index: The unit to move (its full subtree follows).
+            target_row_index: The drop target.
+            peer_drop: True if target is a peer at the same level; the
+                source subtree is inserted AFTER the target under the
+                target's parent. False if target is the new parent at
+                source_level - 1; the source subtree is inserted as the
+                last child of the target.
+
+        Returns True if the move was performed, False otherwise.
+        """
+        self._ensure_built()
+        source_level = self.get_level(row_index)
+        if source_level is None:
+            return False
+        target_level = self.get_level(target_row_index)
+        if target_level is None:
+            return False
+        if target_row_index == row_index:
+            return False
+        if self.is_descendant_of(target_row_index, row_index):
+            return False
+
+        if peer_drop:
+            if source_level != target_level:
+                return False
+            target_key = self.get_hierarchy_key_by_index(target_row_index)
+            new_parent_key = self.get_parent_key(target_key)
+            target_l_value = target_key[source_level - 1]
+            new_l_value = target_l_value + 1
+            # Renumber siblings at level L and all their descendants at
+            # deeper levels so subunit keys stay consistent.
+            for i in range(len(self.df)):
+                level_i = self.get_level(i)
+                if level_i is None or level_i < source_level:
+                    continue
+                k = self.get_hierarchy_key_by_index(i)
+                if k[:source_level - 1] != new_parent_key[:source_level - 1]:
+                    continue
+                existing_val = k[source_level - 1]
+                if existing_val >= new_l_value:
+                    self.df.at[i, HIERARCHY_COLS[source_level - 1]] = existing_val + 1
+        else:
+            if target_level != source_level - 1:
+                return False
+            new_parent_key = self.get_hierarchy_key_by_index(target_row_index)
+            existing_indices = []
+            for c in self._parent_to_children.get(target_row_index, []):
+                if self.get_level(c) == source_level:
+                    val = self.df.at[c, HIERARCHY_COLS[source_level - 1]]
+                    if pd.notna(val) and val != 0:
+                        existing_indices.append(int(val))
+            new_l_value = max(existing_indices) + 1 if existing_indices else 1
+
+        subtree_rows = self._collect_subtree_rows(row_index)
+        new_prefix = list(new_parent_key[:source_level - 1])
+        for r in subtree_rows:
+            old_key = self.get_hierarchy_key_by_index(r)
+            new_key = new_prefix + [new_l_value] + list(old_key[source_level:])
+            for i, hcol in enumerate(HIERARCHY_COLS):
+                self.df.at[r, hcol] = new_key[i]
+
+        self._invalidate_caches()
+        self._build_adjacency_index()
+        return True
+
+    def _collect_subtree_rows(self, row_index: int) -> set:
+        """Collect all row indices in the subtree rooted at row_index (including itself)."""
+        rows: set = set()
+        stack: List[int] = [row_index]
+        while stack:
+            cur = stack.pop()
+            if cur in rows:
+                continue
+            rows.add(cur)
+            for child in self._parent_to_children.get(cur, []):
+                if child not in rows:
+                    stack.append(child)
+        return rows
+
+    def is_descendant_of(self, potential_descendant: int, ancestor: int) -> bool:
+        """Check if potential_descendant is in the subtree of ancestor."""
+        if potential_descendant == ancestor:
+            return False
+        return potential_descendant in self._collect_subtree_rows(ancestor)
+
     def insert_unit(self, parent_row_index: int, template_path: str) -> int:
         """Insert a new unit from a template CSV under the given parent.
 
