@@ -16,6 +16,7 @@ from core.oob_validation import OOBValidator
 from gui.oob_tree_view import OOBTreeWidget
 from gui.oob_details_view import OOBDetailsWidget
 from gui.oob_visual_view import OOBVisualWidget
+from gui.oob_shared_toolbar import OOBSharedToolbar
 from gui.oob_map_view import OOBMapWidget
 from gui.oob_scenario_tab import ScenarioTab
 
@@ -172,12 +173,6 @@ class OOBViewer(QMainWindow):
         self.save_scenario_button.setEnabled(False)
         controls_layout.addWidget(self.save_scenario_button)
 
-        self.regen_button = QPushButton("Regen Indices")
-        self.regen_button.clicked.connect(self.action_regenerate_indices)
-        self.regen_button.setEnabled(False)
-        self.regen_button.setToolTip("Regenerate hierarchy indices sequentially under each parent")
-        controls_layout.addWidget(self.regen_button)
-
         self.status_label = QLabel("No file loaded")
         controls_layout.addWidget(self.status_label)
 
@@ -198,6 +193,16 @@ class OOBViewer(QMainWindow):
         self.tree.unit_deleted.connect(self.on_unit_deleted)
         self.tree.zoom_to_unit_requested.connect(self.on_zoom_to_unit)
 
+        self.shared_toolbar = OOBSharedToolbar()
+        self.shared_toolbar.regen_indices_requested.connect(self.action_regenerate_indices)
+        self.shared_toolbar.regenerate_layout_requested.connect(
+            lambda: self.visual._on_regenerate_view())
+        self.shared_toolbar.reset_view_requested.connect(
+            lambda: self.visual._on_reset_view())
+        self.shared_toolbar.placement_filter_changed.connect(
+            lambda filter_state: self.tree.set_placement_filter(filter_state))
+        self.shared_toolbar.setDisabled(True)
+
         self.visual = OOBVisualWidget(self.data)
         self.visual.unit_selected.connect(self.on_unit_selected)
 
@@ -211,6 +216,8 @@ class OOBViewer(QMainWindow):
             drills=self.config.get("drills"))
 
         self.map_viewer.unit_selected.connect(self.on_unit_selected)
+        self.map_viewer.unit_placed.connect(self._on_placement_changed)
+        self.map_viewer.unit_removed.connect(self._on_placement_changed)
         self.map_viewer.map_loaded.connect(
             lambda path: self._save_config(**{"map-ini": path}))
 
@@ -242,9 +249,11 @@ class OOBViewer(QMainWindow):
         self.right_tab_widget.addTab(self.scenario, "Scenario")
 
         self.left_splitter.addWidget(self.tree)
+        self.left_splitter.addWidget(self.shared_toolbar)
         self.left_splitter.addWidget(self.visual)
         self.left_splitter.setStretchFactor(0, 1)
-        self.left_splitter.setStretchFactor(1, 2)
+        self.left_splitter.setStretchFactor(1, 0)
+        self.left_splitter.setStretchFactor(2, 2)
 
         self.main_splitter.addWidget(self.left_splitter)
         self.main_splitter.addWidget(self.right_tab_widget)
@@ -364,7 +373,7 @@ class OOBViewer(QMainWindow):
             self.status_label.setText(path)
             self.save_button.setEnabled(True)
             self.save_scenario_button.setEnabled(True)
-            self.regen_button.setEnabled(True)
+            self.shared_toolbar.setDisabled(False)
 
         except Exception as e:
             QMessageBox.critical(self, "Load Error",
@@ -405,9 +414,13 @@ class OOBViewer(QMainWindow):
         self.visual.populate()
         self.map_viewer.remove_units_by_row_indices(deleted_row_indices)
         self.map_viewer.shift_placed_unit_indices(deleted_row_indices)
+        self._on_placement_changed()
 
     def on_zoom_to_unit(self, row_index: int):
         self.map_viewer.on_unit_double_clicked(row_index)
+
+    def _on_placement_changed(self):
+        self.tree.set_placed_row_indices(self.map_viewer.placed_row_indices)
 
     def action_regenerate_indices(self):
         reply = QMessageBox.question(

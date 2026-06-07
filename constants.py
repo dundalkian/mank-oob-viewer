@@ -70,6 +70,13 @@ COLOR_BORDER_HIGHLIGHTED = QColor("#ffffff")
 TREE_SIDE_1_BG = "#2c2c40"
 TREE_SIDE_2_BG = "#402c2c"
 
+# ── Tree-view placement indicators ─────────────────────────────────
+TREE_INDICATOR_PLACED = QColor("#ffffff")       # ▣ (placed on map)
+TREE_INDICATOR_UNPLACED = QColor("#888888")     # ▢ / ◫ (unplaced)
+
+# ── Shared toolbar filter button colors ────────────────────────────
+FILTER_ACTIVE_COLOR = QColor("#b388ff")         # light purple (non-default filter)
+
 # ── Game design constants ─────────────────────────────────────────
 SPRITE_SCALE: int = 6  # Head Count / SPRITE_SCALE = number of subunit sprites in a level-6 unit
 

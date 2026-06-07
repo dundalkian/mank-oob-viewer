@@ -656,6 +656,7 @@ class OOBMapWidget(QWidget):
     """Widget for displaying map information and minimap visualization."""
 
     unit_placed = Signal(int, int, int)
+    unit_removed = Signal(int)
     unit_selected = Signal(int)
     drills_loaded = Signal(str)
     objective_placed = Signal(int)
@@ -1228,6 +1229,8 @@ class OOBMapWidget(QWidget):
     def _clear_all_units(self):
         for unit_item in self.placed_units:
             self.minimap_scene.removeItem(unit_item)
+        for idx in list(self.placed_by_row.keys()):
+            self.unit_removed.emit(idx)
         self.placed_units.clear()
         self.placed_row_indices.clear()
         self.placed_by_row.clear()
@@ -1244,6 +1247,7 @@ class OOBMapWidget(QWidget):
             item = self.placed_by_row.pop(idx)
             self.placed_row_indices.discard(idx)
             self.minimap_scene.removeItem(item)
+            self.unit_removed.emit(idx)
         # Filter placed_units once — O(P) instead of O(k*P).
         self.placed_units = [u for u in self.placed_units if u.unit_row_index not in to_remove]
         self._highlighted -= to_remove

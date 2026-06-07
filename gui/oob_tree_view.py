@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QMimeData, QByteArray
 from PySide6.QtGui import QBrush, QColor, QDrag
 from core.oob_model import OOBData
-from constants import TREE_SIDE_1_BG, TREE_SIDE_2_BG
+from constants import TREE_SIDE_1_BG, TREE_SIDE_2_BG, TREE_INDICATOR_PLACED, TREE_INDICATOR_UNPLACED
 import pandas as pd
 import traceback
 
@@ -32,6 +32,7 @@ class OOBTreeWidget(QTreeWidget):
     insert_template_requested = Signal()
     zoom_to_unit_requested = Signal(int)
     formation_requested = Signal(int, dict)
+    filter_count_changed = Signal(int, int)  # visible_count, total_count
 
     def __init__(self, data: OOBData, parent=None):
         super().__init__(parent)
@@ -40,6 +41,9 @@ class OOBTreeWidget(QTreeWidget):
         self._drag_start_pos = None
         self._drag_item = None
         self._selection_from_tree = False
+        self._placed_row_indices: set = set()
+        self._placement_filter: str = "all"
+        self._total_unit_count: int = 0
 
         self.setColumnCount(5)
         self.setHeaderLabels(["Unit", "Level", "Strength", "Experience", "Line"])
@@ -197,8 +201,9 @@ class OOBTreeWidget(QTreeWidget):
                     subtree_e = subtree_experience[idx]
                     strength_str = (str(int(subtree_s)) if subtree_s == int(subtree_s)
                                     else str(subtree_s))
+                    initial_indicator = "\u25a3" if idx in self._placed_row_indices else "\u25a2"
                     item = QTreeWidgetItem([
-                        info.name, level_info, strength_str,
+                        f"{initial_indicator} {info.name}", level_info, strength_str,
                         f"{subtree_e:.2f}", str(line_nums[idx]),
                     ])
                     item.setData(0, Qt.UserRole, idx)
@@ -224,6 +229,8 @@ class OOBTreeWidget(QTreeWidget):
             self.resizeColumnToContents(col)
 
         self._expand_initial_levels()
+        self._total_unit_count = len(self.data.df)
+        self.refresh_indicators_and_visibility()
 
     def _expand_initial_levels(self) -> None:
         """Expand Side and Army level units in the tree.
@@ -270,6 +277,77 @@ class OOBTreeWidget(QTreeWidget):
         expanded = self.get_expanded_keys()
         self.populate()
         self.restore_expanded_keys(expanded)
+
+    # ── Placement indicator and filter ──────────────────────────────
+
+    def _collect_all_items(self) -> List[QTreeWidgetItem]:
+        result = []
+        def _walk(item):
+            result.append(item)
+            for i in range(item.childCount()):
+                _walk(item.child(i))
+        for i in range(self.topLevelItemCount()):
+            _walk(self.topLevelItem(i))
+        return result
+
+    def _set_indicator(self, item, indicator, color):
+        full_text = item.text(0)
+        if full_text and full_text[0] in ("\u25a3", "\u25a2", "\u25eb"):
+            base_name = full_text[2:]
+        else:
+            base_name = full_text
+        item.setText(0, f"{indicator} {base_name}")
+        item.setData(0, Qt.UserRole + 2, indicator)
+        item.setForeground(0, QBrush(color))
+
+    def refresh_indicators_and_visibility(self):
+        all_items = self._collect_all_items()
+        matching = set()
+        for item in all_items:
+            row_index = item.data(0, Qt.UserRole)
+            is_placed = row_index in self._placed_row_indices
+            if self._placement_filter == "all":
+                matches = True
+            elif self._placement_filter == "placed":
+                matches = is_placed
+            else:
+                matches = not is_placed
+            if matches:
+                matching.add(item)
+        visible = set(matching)
+        for item in matching:
+            parent = item.parent()
+            while parent is not None:
+                visible.add(parent)
+                parent = parent.parent()
+        visible_count = 0
+        for item in all_items:
+            row_index = item.data(0, Qt.UserRole)
+            is_placed = row_index in self._placed_row_indices
+            item.setHidden(item not in visible)
+            if item in visible:
+                visible_count += 1
+            if is_placed:
+                indicator = "\u25a3"
+                color = TREE_INDICATOR_PLACED
+            elif item in matching:
+                indicator = "\u25a2"
+                color = TREE_INDICATOR_UNPLACED
+            else:
+                indicator = "\u25eb"
+                color = TREE_INDICATOR_UNPLACED
+            self._set_indicator(item, indicator, color)
+        self.filter_count_changed.emit(visible_count, self._total_unit_count)
+
+    def set_placed_row_indices(self, row_indices: set) -> None:
+        self._placed_row_indices = set(row_indices)
+        self.refresh_indicators_and_visibility()
+
+    def set_placement_filter(self, mode: str) -> None:
+        if mode not in ("all", "placed", "unplaced"):
+            return
+        self._placement_filter = mode
+        self.refresh_indicators_and_visibility()
 
     def drawRow(self, painter, option, index):
         item = self.itemFromIndex(index)

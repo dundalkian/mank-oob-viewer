@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QGraphicsView, QGraphicsScene, QGraphicsLineItem
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsLineItem
 from PySide6.QtCore import Qt, Signal, QRectF, QLineF
 from PySide6.QtGui import QPainter, QPen, QColor
 from core.oob_model import OOBData
@@ -25,18 +25,6 @@ class OOBVisualWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-
-        controls_layout = QHBoxLayout()
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.addStretch()
-        self.regenerate_view_button = QPushButton("Regenerate Layout")
-        self.regenerate_view_button.clicked.connect(self._on_regenerate_view)
-        controls_layout.addWidget(self.regenerate_view_button)
-        self.reset_view_button = QPushButton("Reset View")
-        self.reset_view_button.clicked.connect(self._on_reset_view)
-        controls_layout.addWidget(self.reset_view_button)
-
-        layout.addLayout(controls_layout)
         layout.addWidget(self.view)
         self.setLayout(layout)
 
