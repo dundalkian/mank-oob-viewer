@@ -49,7 +49,6 @@ class OOBTreeWidget(QTreeWidget):
         self.data = data
         self._drag_start_pos = None
         self._drag_item = None
-        self._selection_from_tree = False
         self._placed_row_indices: set = set()
         self._placement_filter: str = "all"
         self._total_unit_count: int = 0
@@ -109,7 +108,6 @@ class OOBTreeWidget(QTreeWidget):
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self._selection_from_tree = False
         self._expanded_keys: set = set()
         self.itemExpanded.connect(self._on_item_expanded)
         self.itemCollapsed.connect(self._on_item_collapsed)
@@ -642,7 +640,6 @@ class OOBTreeWidget(QTreeWidget):
         item = items[0]
         row_index = item.data(0, Qt.UserRole)
         if row_index is not None:
-            self._selection_from_tree = True
             self.unit_selected.emit(row_index)
 
     def show_context_menu(self, position) -> None:

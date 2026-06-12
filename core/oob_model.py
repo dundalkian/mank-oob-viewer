@@ -1,18 +1,15 @@
-import math
-import re
-import random
-import traceback
 import numpy as np
 import pandas as pd
 from io import StringIO
 from typing import Tuple, List, Optional, Dict, Set, Any, NamedTuple
-import os
 
 from constants import (
     COLUMN_ALIASES, HIERARCHY_COLS, LEVEL_NAMES, INT_COLUMNS, REQUIRED_COLUMNS,
     SPRITE_SCALE,
 )
 from core.formation import detect_unit_type
+from core.oob_templates import TemplateSystem
+from core.oob_scenario import export_scenario
 
 
 class UnitInfo(NamedTuple):
@@ -79,10 +76,8 @@ class OOBData:
         self._parent_to_children: Optional[Dict[int, List[int]]] = None
         self._children_set: set = set()  # all row indices that appear as a child
 
-        # Template variation caches
-        self._pool_cache: Dict[str, List[str]] = {}
-        self._seq_counters: Dict[Tuple[int, str], int] = {}
-        self._cycle_counters: Dict[Tuple[int, str], int] = {}
+        # Template system (extracted module)
+        self.templates = TemplateSystem(self)
         self._level_by_row: Optional[np.ndarray] = None
         self._hierarchy_keys: Optional[np.ndarray] = None  # shape (n_rows, 6) int64
 
@@ -200,143 +195,9 @@ class OOBData:
         self.filepath = path
 
     def save_scenario(self, scenario_dir: str, map_name: str, oob_filename: str, placed_units, objectives=None, intro_text: str = "", start_time: str = "", victory_conditions: dict = None) -> None:
-        import os
-        df = self._df_sorted_by_hierarchy(self._ensure_df().copy())
-        if "line_number" in df.columns:
-            df = df.drop(columns=["line_number"])
-
-        scenario_cols = [
-            "userName", "id", "sideIndex", "armyIndex", "corpsIndex", "divisionIndex",
-            "brigadeIndex", "regimentIndex", "battalionIndex",
-            "ammo", "dirSouth", "dirEast", "south", "east", "formation",
-            "headCount", "fatigue", "morale",
-        ]
-
-        scenario_to_oob = {
-            "userName": "NAME1",
-            "id": "ID",
-            "sideIndex": "SIDE 1",
-            "armyIndex": "ARMY 2",
-            "corpsIndex": "CORPS 3",
-            "divisionIndex": "DIV 4",
-            "brigadeIndex": "BGDE 5",
-            "regimentIndex": "BTN 6",
-            "battalionIndex": None,
-            "ammo": "AMMO",
-            "dirSouth": None,
-            "dirEast": None,
-            "south": None,
-            "east": None,
-            "formation": "Formation",
-            "headCount": "Head Count",
-            "fatigue": "Fatigue",
-            "morale": "Morale",
-        }
-
-        scenario_df = pd.DataFrame()
-        int_columns = set(HIERARCHY_COLS + INT_COLUMNS)
-
-        for scenario_col in scenario_cols:
-            oob_col = scenario_to_oob.get(scenario_col)
-            if oob_col and oob_col in df.columns:
-                if oob_col in int_columns:
-                    scenario_df[scenario_col] = df[oob_col].fillna(0)
-                else:
-                    scenario_df[scenario_col] = df[oob_col].fillna("")
-            else:
-                scenario_df[scenario_col] = ""
-
-        if placed_units:
-            placed_lookup = {pu["row_index"]: pu for pu in placed_units}
-            for i in scenario_df.index:
-                if i in placed_lookup:
-                    pu = placed_lookup[i]
-                    south = -1 * math.cos(math.radians(pu["rotation"]))
-                    east = math.sin(math.radians(pu["rotation"]))
-                    scenario_df.at[i, "south"] = pu["world_y"]
-                    scenario_df.at[i, "east"] = pu["world_x"]
-                    scenario_df.at[i, "dirSouth"] = south
-                    scenario_df.at[i, "dirEast"] = east
-                    if pu.get("formation"):
-                        scenario_df.at[i, "formation"] = pu["formation"]
-
-        # Only save rows for units that were placed on the map.
-        if placed_units:
-            placed_row_indices = set(pu["row_index"] for pu in placed_units)
-            scenario_df = scenario_df[scenario_df.index.isin(placed_row_indices)].reset_index(drop=True)
-
-        os.makedirs(scenario_dir, exist_ok=True)
-        path = os.path.join(scenario_dir, "scenario.csv")
-        scenario_df.to_csv(path, encoding="cp1252", index=False)
-        self.filepath = path
-
-        with open(path, "r", encoding="cp1252") as f:
-            lines = f.readlines()
-        master_fields = ["MASTER", oob_filename] + [""] * (len(scenario_cols) - 2)
-        master_line = ",".join(master_fields) + "\n"
-        lines.insert(1, master_line)
-        with open(path, "w", encoding="cp1252") as f:
-            f.writelines(lines)
-
-        _copy_templates(scenario_dir)
-
-        # Write custom intro text if provided, overwriting the template default
-        if intro_text:
-            intro_path = os.path.join(scenario_dir, "EnglishScenIntro.txt")
-            with open(intro_path, "w", encoding="cp1252") as f:
-                f.write(intro_text)
-
-        # Write objectives to maplocations.csv
-        if objectives:
-            maplocations_header = [
-                "Name", "ID", "Priority", "Type", "AI",
-                "loc x", "loc z", "radius", "Men", "Points",
-                "Fatigue", "Morale", "Ammo", "OccMod",
-                "Beg", "End", "Interval", "Sprite",
-                "Army1", "Army2", "Army3",
-            ]
-            maplocations_path = os.path.join(scenario_dir, "maplocations.csv")
-            with open(maplocations_path, "w", encoding="cp1252") as f:
-                f.write(",".join(maplocations_header) + "\n")
-                for obj in objectives:
-                    fields = obj.get("fields", {})
-                    row = ",".join(str(fields.get(col, "")) for col in maplocations_header)
-                    f.write(row + "\n")
-
-        if map_name or start_time or victory_conditions:
-            ini_path = os.path.join(scenario_dir, "scenario.ini")
-            if os.path.exists(ini_path):
-                with open(ini_path, "r", encoding="cp1252") as f:
-                    lines = f.readlines()
-
-                # Map victory condition labels to ini section names
-                vc_section_map = {
-                    "Major Victory": "endmajwin",
-                    "Minor Victory": "endwin",
-                    "Draw": "endtie",
-                    "Minor Defeat": "endfail",
-                    "Major Defeat": "endmajfail",
-                }
-
-                in_section = None
-                vc_inserted = set()
-                for i, line in enumerate(lines):
-                    stripped = line.strip().lower()
-                    if stripped.startswith("[") and stripped.endswith("]"):
-                        in_section = stripped[1:-1]
-                    elif in_section == "init" and stripped.startswith("map=") and map_name:
-                        lines[i] = f"map={map_name}\n"
-                    elif in_section == "init" and stripped.startswith("starttime=") and start_time:
-                        lines[i] = f"starttime={start_time}\n"
-                    elif victory_conditions and in_section in vc_section_map.values() and in_section not in vc_inserted:
-                        vc_label = {v: k for k, v in vc_section_map.items()}.get(in_section)
-                        if vc_label and vc_label in victory_conditions and stripped.startswith("article="):
-                            points = victory_conditions[vc_label]
-                            lines.insert(i + 1, f"grade={points}\n")
-                            vc_inserted.add(in_section)
-
-                with open(ini_path, "w", encoding="cp1252") as f:
-                    f.writelines(lines)
+        export_scenario(self, scenario_dir, map_name, oob_filename,
+                        placed_units, objectives, intro_text, start_time,
+                        victory_conditions)
 
     # ── Row access ─────────────────────────────────────────────────
 
@@ -943,20 +804,7 @@ class OOBData:
             return True
 
     def _next_unique_id(self, template_id: str) -> str:
-        """Return template_id with the smallest unused numeric suffix appended."""
-        used_indices = set()
-        for val in self.df["ID"].dropna():
-            val_str = str(val).strip()
-            if val_str.startswith(template_id) and val_str != template_id:
-                suffix = val_str[len(template_id):]
-                try:
-                    used_indices.add(int(suffix))
-                except ValueError:
-                    pass
-        idx = 1
-        while idx in used_indices:
-            idx += 1
-        return f"{template_id}{idx}"
+        return self.templates.next_unique_id(template_id)
 
     def is_descendant_of(self, potential_descendant: int, ancestor: int) -> bool:
         """Check if potential_descendant is in the subtree of ancestor."""
@@ -965,318 +813,16 @@ class OOBData:
         return potential_descendant in self.get_subordinate_row_indices(ancestor)
 
     def load_templates(self, templates_dir: str) -> List[Dict[str, Any]]:
-        """Load all template units from CSV files in templates_dir.
-
-        Each CSV uses the standard OOB header. Hierarchy columns contain 'X'
-        to mark the template's valid level. Returns a list of dicts with
-        keys: name, level, row, file, id.
-        """
-        if not os.path.isdir(templates_dir):
-            return []
-
-        templates: List[Dict[str, Any]] = []
-        saved_headers = self._original_headers
-        for fname in sorted(os.listdir(templates_dir)):
-            if not fname.endswith(".csv"):
-                continue
-            fpath = os.path.join(templates_dir, fname)
-            try:
-                tdf = pd.read_csv(fpath, encoding="cp1252", dtype=str)
-                self._original_headers = {}
-                tdf = self._normalize_columns(tdf)
-            except Exception:
-                print(f"Error in loading template file {fname}: {traceback.format_exc()}")
-                continue
-
-            for _, row in tdf.iterrows():
-                # Determine level from X in hierarchy columns
-                level = None
-                for li, hcol in enumerate(HIERARCHY_COLS):
-                    if hcol in tdf.columns:
-                        val = str(row.get(hcol, "")).strip().upper()
-                        if val == "X":
-                            level = li + 1
-                            break
-                if level is None:
-                    continue
-
-                name = str(row.get("Name", row.get("NAME1", "Unknown")))
-                uid = str(row.get("ID", ""))
-                row_dict = {col: row.get(col, "") for col in tdf.columns}
-                templates.append({
-                    "name": name,
-                    "level": level,
-                    "row": row_dict,
-                    "file": fpath,
-                    "id": uid,
-                })
-        self._original_headers = saved_headers
-        return templates
+        return self.templates.load_templates(templates_dir)
 
     def save_as_template(self, row_index: int, templates_dir: str) -> str:
-        """Save a unit as a user template. Creates user_templates.csv if needed.
-
-        Reads headers from templates/headers/oob_headers.csv. Generates ID as
-        OOB_USER_# (incrementing from max existing). Sets hierarchy columns:
-        all empty except X at the unit's level.
-
-        Returns the new ID string.
-        """
-        header_path = os.path.join(
-            os.path.dirname(templates_dir), "headers", "oob_headers.csv")
-        if not os.path.exists(header_path):
-            raise FileNotFoundError(f"Header file not found: {header_path}")
-
-        header_df = pd.read_csv(header_path, encoding="cp1252", dtype=str, nrows=0)
-        header_cols = list(header_df.columns)
-
-        unit_row = self.df.iloc[row_index]
-        unit_level = self.get_level(row_index)
-        if unit_level is None:
-            raise ValueError("Cannot determine unit level")
-
-        # Build the template row from header columns
-        new_row = {}
-        for col in header_cols:
-            val = unit_row.get(col, "")
-            new_row[col] = "" if pd.isna(val) else str(val)
-
-        # Clear hierarchy columns and set X for the unit's level
-        for hcol in HIERARCHY_COLS:
-            new_row[hcol] = ""
-        new_row[HIERARCHY_COLS[unit_level - 1]] = "X"
-
-        # Determine next OOB_USER_LvlX_Y_ ID
-        user_path = os.path.join(templates_dir, "user_templates.csv")
-        level_count = 0
-        if os.path.exists(user_path):
-            existing = pd.read_csv(user_path, encoding="cp1252", dtype=str)
-            existing = self._normalize_columns(existing)
-            if "ID" in existing.columns:
-                prefix = f"OOB_USER_Lvl{unit_level}_"
-                for val in existing["ID"].dropna():
-                    val_str = str(val).strip()
-                    if val_str.startswith(prefix):
-                        try:
-                            num = int(val_str[len(prefix):].rstrip("_"))
-                            level_count = max(level_count, num)
-                        except ValueError:
-                            pass
-        new_id = f"OOB_USER_Lvl{unit_level}_{level_count + 1}_"
-        new_row["ID"] = new_id
-
-        # Write to file
-        new_df = pd.DataFrame([new_row])[header_cols]
-        if os.path.exists(user_path):
-            existing = pd.read_csv(user_path, encoding="cp1252", dtype=str)
-            existing = pd.concat([existing, new_df], ignore_index=True)
-            existing.to_csv(user_path, index=False, encoding="cp1252")
-        else:
-            new_df.to_csv(user_path, index=False, encoding="cp1252")
-
-        return new_id
+        return self.templates.save_as_template(row_index, templates_dir)
 
     def load_pools(self, pools_dir: str) -> None:
-        """Load name pools from .txt files in pools_dir.
-
-        Each file becomes a pool keyed by its stem (e.g. 'french_commanders').
-        Files are plain text with one entry per line.
-        """
-        if not os.path.isdir(pools_dir):
-            return
-        for fname in os.listdir(pools_dir):
-            if not fname.endswith(".txt"):
-                continue
-            pool_name = fname[:-4]
-            fpath = os.path.join(pools_dir, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    lines = [line.strip() for line in f if line.strip()]
-                if lines:
-                    self._pool_cache[pool_name] = lines
-            except Exception:
-                continue
-
-    def _resolve_pool(self, pool_name: str) -> str:
-        """Pick a random entry from a named pool."""
-        entries = self._pool_cache.get(pool_name)
-        if not entries:
-            return f"{{{pool_name}}}"
-        return random.choice(entries)
-
-    def _resolve_seq(self, seq_name: str, parent_row_index: int,
-                     suffix_pattern: str = "") -> int:
-        """Get the next sequence number for a named sequence under a parent.
-
-        On first call for a (parent, seq_name) combo, scans existing
-        children's NAME1 for the suffix pattern to find the max number
-        already in use. If no suffix is provided, starts from the child count.
-
-        Args:
-            seq_name: The sequence name (e.g. "us_inf").
-            parent_row_index: The parent unit's row index.
-            suffix_pattern: The resolved literal text after the seq
-                placeholder (e.g. "th Regiment" from "{seq:us_inf}th Regiment").
-                Used to match existing children and find the max number.
-        """
-        key = (parent_row_index, seq_name)
-        if key not in self._seq_counters:
-            max_num = 0
-            if suffix_pattern:
-                # Scan existing children for matching pattern: "N suffix_pattern"
-                escaped = re.escape(suffix_pattern)
-                match_re = re.compile(r'^(\d+)\s*' + escaped + r'$', re.IGNORECASE)
-                children = self._parent_to_children.get(parent_row_index, [])
-                for c in children:
-                    name = str(self.df.at[c, "NAME1"])
-                    m = match_re.match(name)
-                    if m:
-                        max_num = max(max_num, int(m.group(1)))
-            else:
-                children = self._parent_to_children.get(parent_row_index, [])
-                max_num = len(children)
-            self._seq_counters[key] = max_num + 1
-        else:
-            self._seq_counters[key] += 1
-        return self._seq_counters[key]
-
-    def _resolve_cycle(self, cycle_str: str, parent_row_index: int) -> str:
-        """Cycle through a pipe-separated list of values.
-
-        The list itself is the key. On first call for a (parent, list)
-        combo, returns the first item. Each subsequent call advances to
-        the next item, wrapping around when exhausted.
-
-        Args:
-            cycle_str: Pipe-separated values (e.g. "1|1|2|2|3|3" or "1er|2e").
-            parent_row_index: The parent unit's row index.
-        """
-        items = [x.strip() for x in cycle_str.split("|")]
-        if not items:
-            return f"{{{cycle_str}}}"
-        key = (parent_row_index, cycle_str)
-        if key not in self._cycle_counters:
-            self._cycle_counters[key] = 0
-        idx = self._cycle_counters[key]
-        result = items[idx % len(items)]
-        self._cycle_counters[key] = idx + 1
-        return result
-
-    @staticmethod
-    def _int_to_ordinal(n: int) -> str:
-        """Convert an integer to an English ordinal numeral (e.g. 1→'1st')."""
-        if 11 <= (n % 100) <= 13:
-            suffix = "th"
-        else:
-            suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-        return f"{n}{suffix}"
-
-    def _resolve_rangeord(self, min_val: int, max_val: int) -> str:
-        """Pick a random integer in [min, max] and return it as an ordinal."""
-        return self._int_to_ordinal(random.randint(min_val, max_val))
-
-    def _resolve_seqord(self, seq_name: str, parent_row_index: int,
-                        suffix_pattern: str = "") -> str:
-        """Like _resolve_seq but returns the result as an ordinal string."""
-        num = self._resolve_seq(seq_name, parent_row_index, suffix_pattern)
-        return self._int_to_ordinal(num)
-
-    def _resolve_suffix_modifiers(self, text: str) -> str:
-        """Resolve pool, range, rangeord, seq, seqord, and pick modifiers in a suffix string.
-
-        Used to compute the actual match pattern for seq scanning.
-        Pool picks use the first option for deterministic matching.
-        Range uses 0. Seqord uses "1st" for deterministic matching.
-        """
-        def replace_pool(m):
-            options = m.group(1).split("|")
-            return options[0]
-        def replace_range(m):
-            return "0"
-        def replace_rangeord(m):
-            return "1st"
-        def replace_seqord(m):
-            return "1"
-        def replace_pick(m):
-            options = m.group(1).split("|")
-            return options[0]
-        text = re.sub(r'\{pool:([^}]+)\}', replace_pool, text)
-        text = re.sub(r'\{range:(\d+)-(\d+)\}', replace_range, text)
-        text = re.sub(r'\{rangeord:(\d+)-(\d+)\}', replace_rangeord, text)
-        text = re.sub(r'\{seqord:([^}]+)\}', replace_seqord, text)
-        text = re.sub(r'\{pick:([^}]+)\}', replace_pick, text)
-        return text
+        self.templates.load_pools(pools_dir)
 
     def _resolve_modifiers(self, row_dict: dict, parent_row_index: int) -> None:
-        """Resolve all {modifier} placeholders in string fields of row_dict.
-
-        Uses a two-pass approach for seq modifiers:
-        1. First pass: extract seq names and compute suffix patterns by
-           resolving nested modifiers in the raw text after each seq marker.
-        2. Second pass: resolve all modifiers, using the precomputed suffix
-           patterns for seq scanning.
-
-        Modifiers:
-            {seq:name}         - sequential number per (parent, name)
-            {seqord:name}      - sequential ordinal per (parent, name) (1st, 2nd, ...)
-            {cycle:v1|v2|...}  - cycling list per parent, wraps around
-            {pool:name}        - random pick from named pool file
-            {range:min-max}    - random integer in range
-            {rangeord:min-max} - random ordinal in range (1st, 2nd, ...)
-            {pick:a|b|c}       - random pick from list
-        """
-        seq_pattern = re.compile(r'\{seq(?:ord)?:([^}]+)\}')
-        all_mods = re.compile(
-            r'\{seqord:([^}]+)\}'
-            r'|\{seq:([^}]+)\}'
-            r'|\{cycle:([^}]+)\}'
-            r'|\{pool:([^}]+)\}'
-            r'|\{rangeord:(\d+)-(\d+)\}'
-            r'|\{range:(\d+)-(\d+)\}'
-            r'|\{pick:([^}]+)\}'
-        )
-
-        # First pass: compute suffix patterns for each seq/seqord in each field
-        seq_suffixes: Dict[str, str] = {}
-        for col in list(row_dict.keys()):
-            val = row_dict[col]
-            if not isinstance(val, str) or "{seq" not in val:
-                continue
-            for m in seq_pattern.finditer(val):
-                seq_name = m.group(1)
-                if seq_name not in seq_suffixes:
-                    # Extract raw text after the seq marker to end of string
-                    raw_suffix = val[m.end():]
-                    # Resolve nested modifiers to get actual text pattern
-                    seq_suffixes[seq_name] = self._resolve_suffix_modifiers(raw_suffix)
-
-        # Second pass: resolve all modifiers
-        def replacer(m):
-            if m.group(1) is not None:
-                seq_name = m.group(1)
-                suffix = seq_suffixes.get(seq_name, "")
-                return self._resolve_seqord(seq_name, parent_row_index, suffix)
-            elif m.group(2) is not None:
-                seq_name = m.group(2)
-                suffix = seq_suffixes.get(seq_name, "")
-                return str(self._resolve_seq(seq_name, parent_row_index, suffix))
-            elif m.group(3) is not None:
-                return self._resolve_cycle(m.group(3), parent_row_index)
-            elif m.group(4) is not None:
-                return self._resolve_pool(m.group(4))
-            elif m.group(5) is not None and m.group(6) is not None:
-                return self._resolve_rangeord(int(m.group(5)), int(m.group(6)))
-            elif m.group(7) is not None and m.group(8) is not None:
-                return str(random.randint(int(m.group(7)), int(m.group(8))))
-            elif m.group(9) is not None:
-                options = m.group(9).split("|")
-                return random.choice(options)
-            return m.group(0)
-
-        for col in list(row_dict.keys()):
-            val = row_dict[col]
-            if isinstance(val, str) and "{" in val:
-                row_dict[col] = all_mods.sub(replacer, val)
+        self.templates.resolve_modifiers(row_dict, parent_row_index)
 
     def regenerate_hierarchy_indices(self) -> None:
         """Reassign hierarchy indices sequentially under each parent.
@@ -1337,19 +883,3 @@ class OOBData:
         self._build_adjacency_index()
 
 
-def _copy_templates(scenario_dir: str):
-    """Copy template files from the templates/scenario/ folder into the scenario directory."""
-    import shutil
-    templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "scenario")
-    template_files = [
-        "battlescript.csv",
-        "EnglishScenIntro.txt",
-        "EnglishScenScreen.txt",
-        "maplocations.csv",
-        "scenario.ini",
-    ]
-    for template_file in template_files:
-        src_path = os.path.join(templates_dir, template_file)
-        dst_path = os.path.join(scenario_dir, template_file)
-        if os.path.exists(src_path):
-            shutil.copy2(src_path, dst_path)
