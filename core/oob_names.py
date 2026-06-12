@@ -78,7 +78,7 @@ def generate_oob_names_xml(
             tag2.text = _sanitize_xml_string(name2)
 
     ET.indent(root, space="\t")
-    filename = f"{scenario_name}_OOBNames.xml" if scenario_name else "OOBNames.xml"
+    filename = "OOBNames.xml"
     path = os.path.join(output_dir, filename)
     tree = ET.ElementTree(root)
     with open(path, "wb") as f:
