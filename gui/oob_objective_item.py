@@ -128,8 +128,8 @@ class MapObjectiveItem(QGraphicsItem):
         if change == QGraphicsItem.ItemPositionHasChanged and self.map_widget is not None:
             self.world_x, self.world_y = self.map_widget.scene_to_world(
                 value.x(), value.y())
-            self.fields["loc x"] = self.world_x
-            self.fields["loc z"] = self.world_y
+            self.fields["loc x"] = self.world_y
+            self.fields["loc z"] = self.world_x
             self._rebuild_scene_geometry()
             if hasattr(self.map_widget, '_on_objective_moved_from_item'):
                 self.map_widget._on_objective_moved_from_item(

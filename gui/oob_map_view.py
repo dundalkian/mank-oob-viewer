@@ -676,7 +676,7 @@ class OOBMapWidget(QWidget):
         world_x = int((adjusted_pixel_x / pixmap_width) * (self.tile_scale * self.tga_width))
         world_y = int((adjusted_pixel_y / pixmap_height) * (self.tile_scale * self.tga_height))
 
-        self.coord_label.setText(f"Coordinates: ({world_x}, {world_y})")
+        self.coord_label.setText(f"Coordinates: ({world_y}, {world_x})")
 
     def set_tile_scale(self, value: int):
         self.tile_scale = value
@@ -1347,8 +1347,8 @@ class OOBMapWidget(QWidget):
                 "Priority": "major",
                 "Type": "hold",
                 "AI": "100",
-                "loc x": world_x,
-                "loc z": world_y,
+                "loc x": world_y,
+                "loc z": world_x,
                 "radius": "100",
                 "Men": "100",
                 "Points": "100",
@@ -1396,8 +1396,8 @@ class OOBMapWidget(QWidget):
             return
         item.world_x = new_world_x
         item.world_y = new_world_z
-        item.fields["loc x"] = new_world_x
-        item.fields["loc z"] = new_world_z
+        item.fields["loc x"] = new_world_z
+        item.fields["loc z"] = new_world_x
         new_scene_pos = self.world_to_scene(new_world_x, new_world_z)
         item.setPos(new_scene_pos)
         item._rebuild_scene_geometry()

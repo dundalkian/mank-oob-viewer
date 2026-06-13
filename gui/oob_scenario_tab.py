@@ -316,9 +316,9 @@ class ScenarioTab(QWidget):
                     x_item = self.objectives_table.item(row, LOC_X_COL)
                     z_item = self.objectives_table.item(row, LOC_Z_COL)
                     if x_item:
-                        x_item.setText(str(world_x))
+                        x_item.setText(str(world_z))
                     if z_item:
-                        z_item.setText(str(world_z))
+                        z_item.setText(str(world_x))
                     break
         finally:
             self._updating_table = False
@@ -368,16 +368,16 @@ class ScenarioTab(QWidget):
                 map_item.fields["ID"] = new_value
         elif col == LOC_X_COL:
             try:
-                new_x = int(new_value)
-            except ValueError:
-                return
-            self.map_viewer.move_objective(obj_id, new_x, obj_data["world_z"])
-        elif col == LOC_Z_COL:
-            try:
                 new_z = int(new_value)
             except ValueError:
                 return
             self.map_viewer.move_objective(obj_id, obj_data["world_x"], new_z)
+        elif col == LOC_Z_COL:
+            try:
+                new_x = int(new_value)
+            except ValueError:
+                return
+            self.map_viewer.move_objective(obj_id, new_x, obj_data["world_z"])
         else:
             obj_data["fields"][col_name] = new_value
 
